@@ -1,0 +1,15 @@
+{
+  "name": "Site Footer",
+  "root": {
+    "element": "footer",
+    "baseStyles": {
+      "backgroundColor": "@brand-ink",
+      "color": "@surface",
+      "paddingTop": "@space-section",
+      "paddingBottom": "@space-section"
+    },
+    "children": [
+      { "element": "address", "innerHTML": "1 Example Way, Nowhere" }
+    ]
+  }
+}

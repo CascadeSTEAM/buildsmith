@@ -1,0 +1,65 @@
+"""Tests for the generated go-live plan.
+
+A plan is only worth reading if it is specific. These check it names this site's
+real routes and payloads, that it only raises steps the site actually needs, and
+that it never blurs who performs a live action.
+"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from buildsmith.tools import golive as golive
+
+
+class ThePlan(unittest.TestCase):
+    def setUp(self):
+        self.plan = golive.generate("example")
+
+    def test_it_names_the_real_routes_and_payloads(self):
+        self.assertIn("/about", self.plan)
+        self.assertIn("components/site-header.json", self.plan)
+
+    def test_snapshot_comes_before_anything_else(self):
+        # The recovery step is worthless if it is reached after the damage.
+        self.assertLess(self.plan.index("Builder Snapshot"), self.plan.index("## Tokens"))
+
+    def test_token_readback_precedes_the_component_rebuild(self):
+        # Composing before reading the map back bakes stale literals in.
+        # Scoped to the Tokens section: the word "rebuild" also appears in an
+        # earlier build warning, which would make a whole-document search pass
+        # or fail for the wrong reason.
+        tokens = self.plan.split("## Tokens")[1].split("## Components")[0]
+        self.assertLess(tokens.index("read the token map back"), tokens.index("rebuild"))
+
+    def test_it_surfaces_build_warnings(self):
+        self.assertIn("Build warnings", self.plan)
+
+    def test_it_attributes_every_live_step(self):
+        # A plan that blurs this is how a DNS change gets run from a design repo.
+        for phrase in ("DNS and reverse proxy", "back up the site"):
+            line = next(ln for ln in self.plan.splitlines() if phrase in ln)
+            self.assertIn("operations project", line)
+
+    def test_it_does_not_raise_developer_mode_for_a_site_that_does_not_need_it(self):
+        # The example template has no template_group, so the gate does not apply.
+        # Listing it anyway would dilute the steps that do matter.
+        self.assertNotIn("enable `developer_mode`", self.plan)
+
+    def test_the_verification_list_covers_every_public_page(self):
+        section = self.plan.split("## Cutover")[1]
+        self.assertIn("`/about`", section)
+        # The template is not a public route, so it is not in the checklist.
+        self.assertNotIn("template/example-marketing` —", section)
+
+    def test_it_ends_with_the_rollback(self):
+        self.assertIn("Restore the snapshot", self.plan)
+
+
+if __name__ == "__main__":
+    unittest.main()

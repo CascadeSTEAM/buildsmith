@@ -1,0 +1,9 @@
+#!/bin/sh
+# buildsmith commit-msg — commit messages are published too.
+#
+# Facts leak as readily as tokens: reference tickets as TKT-<num>, never with a
+# client's helpdesk prefix.
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+exec python3 -m buildsmith.tools.guard --message-file "$1"

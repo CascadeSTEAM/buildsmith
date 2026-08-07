@@ -1,0 +1,50 @@
+[project]
+name = "buildsmith"
+version = "0.1.0"
+description = "Design and maintain Frappe Builder websites: tokens, components, templates, replication."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+
+# Deliberately empty. Nothing in primitives/ may take a dependency on an HTTP
+# client — tools here read files and write files, and the absence of a way to
+# reach a live site is a structural property worth protecting (AGENTS.md).
+dependencies = []
+
+# The CLI is stdlib-only on purpose: a designer running the container and a
+# developer running from a clone must execute identical code, and that is easier
+# to guarantee with nothing in between.
+[project.scripts]
+buildsmith = "buildsmith.cli:main"
+
+[project.optional-dependencies]
+# Only the browser check needs anything, and it is opt-in — `buildsmith verify`
+# reports exit code 2 ("could not check") rather than passing when it is absent.
+visual = ["playwright>=1.40"]
+dev = ["pytest>=8", "ruff>=0.6", "playwright>=1.40"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["buildsmith"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests bootstrap sys.path before importing the package under test; the
+# import cannot precede the path insert.
+"tests/*" = ["E402"]
+# bench_scripts are fed verbatim to the bench's own interpreter, and
+# adopt._run patches one by exact line match — reformatting them is riskier
+# than tolerating their compact preamble style.
+"buildsmith/tools/bench_scripts/*" = ["E402", "E702"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,57 @@
+# sites/example/site.yml — the committed reference fixture.
+#
+# Every other sites/<site>/ directory is gitignored and private. This one is
+# fictional on purpose: it documents the schema, and it is what the test suite
+# and the sandbox run against.
+#
+# HARD RULE: reference names only. No credentials, no private IP addresses, no
+# internal hostnames. Secret *resolution* is an action, so it belongs to the
+# operations project, not here — this file names a secret, it never holds one.
+
+site: example
+description: Fictional reference site — schema documentation and test fixture.
+
+# Which of the two workflows this site is built with.
+#   replicate — faithful copy of an existing site, routes preserved
+#   theme     — token manifest -> components -> template -> data-driven pages
+workflow: theme
+
+target:
+  # An alias the operations project knows how to reach. Never an IP, never a
+  # bench path, never a raw internal hostname.
+  alias: sandbox-builder
+  # Public hostnames only.
+  hostnames:
+    - example.test
+
+builder:
+  # Pin the Builder commit this site is designed against (ADR-003). Sandbox
+  # results are only honest if they run the same version as the target.
+  version: v1.0.0-dev
+  commit: null   # set to the resolved commit once the target is probed
+
+secrets:
+  # Reference NAMES resolved at run time by the operations project's credential
+  # tooling. Nothing here is a secret; these are labels for looking one up.
+  api_key_ref: example/builder-api-key
+  api_secret_ref: example/builder-api-secret
+
+design:
+  # Manifest of design *intent*. The applied map read back from the live site is
+  # a different file (tokens-applied.json) and the two are never merged — intent
+  # and result diverge, and that divergence is the thing worth seeing.
+  tokens: tokens.json
+  template_group: example
+
+content:
+  # Data-driven pages: the doctype holding page records, and where source
+  # content is staged before conversion.
+  entry_doctype: Website Entry
+  source: content/
+
+routes:
+  # Static routes shadow dynamic ones. Build the template and verify each record
+  # renders before retiring any legacy page — one at a time. Retiring first
+  # 404s live URLs; renaming breaks inbound links.
+  scheme: flat-slug
+  home: /

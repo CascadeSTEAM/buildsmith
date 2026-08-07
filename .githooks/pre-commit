@@ -1,0 +1,13 @@
+#!/bin/sh
+# buildsmith pre-commit — publication guard over staged changes.
+#
+# Everything substantive lives in buildsmith/tools/guard.py so the hook, the CLI
+# and CI cannot drift. See AGENTS.md 'Publication guard'.
+#
+# This file stays shell because git requires an executable hook, and the two
+# lines below are the whole of it. Every decision is in Python.
+set -eu
+
+echo "=== buildsmith pre-commit ==="
+cd "$(git rev-parse --show-toplevel)"
+exec python3 -m buildsmith.tools.precommit

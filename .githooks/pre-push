@@ -1,0 +1,13 @@
+#!/bin/sh
+# buildsmith pre-push — the whole-repository audit, before anything leaves.
+#
+# Deliberately here and not in pre-commit: this scans the full tree, all of
+# history, every commit message and every ref. That is too slow to run on each
+# commit, and a slow pre-commit hook is a hook people disable.
+#
+# Push is the right boundary anyway. A leak that never leaves the machine is
+# recoverable by rewriting history; one that reaches a remote is not.
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+exec python3 -m buildsmith.tools.prepush

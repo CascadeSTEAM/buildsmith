@@ -1,0 +1,99 @@
+# CI mirrors the local gates — same Python modules, so the two cannot drift.
+#
+# What each job re-runs and why it exists even though the hooks already ran:
+# hooks are per-clone local config (core.hooksPath), so nothing guarantees a
+# contributor's clone had them switched on. CI is the copy of the gate that
+# cannot be uninstalled.
+#
+# The client-token audit is the one gate that CANNOT run fully here: the token
+# list is itself a secret and lives in the operations project. Maintainer
+# pushes get it via the CLIENT_TOKENS repo secret; fork PRs never see secrets
+# (GitHub withholds them by design), so the step degrades to a loud warning
+# rather than failing every outside contribution. The fail-closed version of
+# this check runs where the tokens live: the local pre-push hook.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The audit's history scope reads every ref and every object; a
+          # shallow clone would let it "pass" over one commit while proving
+          # nothing — a silent fail-open.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install (editable, dev extras)
+        run: pip install --quiet --editable '.[dev]'
+
+      - name: Lint
+        run: python -m ruff check buildsmith tests install.py
+
+      - name: Unit suite
+        run: python -m unittest discover -s tests
+
+      - name: Generated docs are current
+        run: |
+          python -m buildsmith.tools.docgen --check
+          python -m buildsmith.tools.schemagen --check
+
+      - name: Publication guard (token audit)
+        env:
+          CLIENT_TOKENS: ${{ secrets.CLIENT_TOKENS }}
+        # Output is discarded on purpose: an audit finding names the token
+        # and the offending line, and this log is public. Pass/fail is the
+        # only thing CI may say out loud; the details are for a local rerun.
+        run: |
+          if [ -n "$CLIENT_TOKENS" ]; then
+            if python -m buildsmith.tools.audit --scope all > /dev/null 2>&1; then
+              echo "audit clean"
+            else
+              echo "::error::The publication audit found something (or could not run). Details are withheld from this public log — run 'buildsmith audit' locally."
+              exit 1
+            fi
+          else
+            echo "::warning::CLIENT_TOKENS secret not available (fork PR, or not configured) — token audit did not run here. The fail-closed audit runs in the maintainer's pre-push hook."
+          fi
+
+  secretscan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The scan covers every commit on every ref, not just this one — a
+          # secret three commits deep is still a secret (ADR-010).
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Scan full history
+        # Through the module, not the binary directly, so the scan CI runs is
+        # byte-for-byte the scan the pre-push hook runs — same flags, same
+        # exit-code mapping, no drift.
+        run: |
+          pip install --quiet --editable .
+          python -m buildsmith.tools.secretscan --history

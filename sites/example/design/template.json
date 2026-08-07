@@ -1,0 +1,15 @@
+{
+  "title": "Example Marketing Template",
+  "route": "template/example-marketing",
+  "project_folder": "buildsmith",
+  "blocks": [
+    {
+      "element": "div",
+      "baseStyles": { "backgroundColor": "@surface" },
+      "children": [
+        { "element": "section", "baseStyles": { "paddingTop": "@space-section" },
+          "children": [ { "element": "h1", "innerHTML": "Heading", "baseStyles": { "color": "@brand-ink" } } ] }
+      ]
+    }
+  ]
+}

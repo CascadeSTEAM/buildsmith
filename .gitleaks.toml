@@ -1,0 +1,21 @@
+# gitleaks configuration — generic credential scanning (ADR-010).
+#
+# The default ruleset (several hundred curated patterns: cloud keys, API
+# tokens, private-key blocks, high-entropy strings) is extended, not replaced.
+# This file exists so that a reviewed false positive has exactly one place to
+# be allowlisted — in a commit, where the review is visible in the diff —
+# rather than in somebody's shell history as a skip variable.
+#
+# Both scans were clean at the time this file was added (60 commits, full
+# history), so there are no allowlist entries yet. When one is needed:
+#
+#   [[allowlists]]
+#   description = "why this is not a secret, with a reviewer's name"
+#   paths = ['''tests/fixtures\.py''']
+#   regexes = ['''the-exact-string''']
+#
+# Never allowlist a path as broad as `tests/` — a real secret pasted into a
+# test is still a real secret.
+
+[extend]
+useDefault = true

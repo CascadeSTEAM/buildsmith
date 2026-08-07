@@ -1,0 +1,64 @@
+# buildsmith sandbox — a disposable Frappe bench running a pinned Builder.
+#
+# This is the deliberate exception to "anything infrastructural goes through the
+# operations project" (ADR-002): a publishable project must be runnable by
+# someone who does not have that project. Local disposable containers live here;
+# anything touching a server does not.
+#
+# Nothing here is reachable from outside the host and nothing in it is precious.
+# `docker compose down -v` is the intended way to start over.
+#
+#   buildsmith sandbox up          bring it up and build the bench
+#   buildsmith check traps        prove it reproduces a known trap
+#
+# Ports are bound to 127.0.0.1 on purpose. A bench with admin/admin credentials
+# has no business listening on anything else.
+
+name: buildsmith-sandbox
+
+services:
+  mariadb:
+    image: mariadb:10.6
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-123}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  redis-cache:
+    image: redis:7-alpine
+
+  redis-queue:
+    image: redis:7-alpine
+
+  bench:
+    image: frappe/bench:latest
+    # The bench itself is built by init.sh; this container just needs to stay up.
+    command: sleep infinity
+    working_dir: /home/frappe
+    environment:
+      SHELL: /bin/bash
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - bench-data:/home/frappe
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
+
+volumes:
+  mariadb-data:
+  bench-data:

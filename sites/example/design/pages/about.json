@@ -1,0 +1,15 @@
+{
+  "title": "About",
+  "route": "about",
+  "blocks": [
+    {
+      "element": "main",
+      "baseStyles": { "backgroundColor": "@surface", "paddingTop": "@space-section" },
+      "children": [
+        { "element": "h1", "innerHTML": "About Example", "baseStyles": { "color": "@brand-ink" } },
+        { "element": "p", "innerHTML": "A fictional site used as this project's reference fixture.",
+          "baseStyles": { "color": "@brand-ink" } }
+      ]
+    }
+  ]
+}

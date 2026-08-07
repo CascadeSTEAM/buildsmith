@@ -1,0 +1,22 @@
+{
+  "name": "Site Header",
+  "root": {
+    "element": "header",
+    "baseStyles": {
+      "backgroundColor": "@surface",
+      "color": "@brand-ink",
+      "paddingTop": "@space-gutter",
+      "paddingBottom": "@space-gutter"
+    },
+    "children": [
+      {
+        "element": "nav",
+        "baseStyles": { "color": "@brand-primary" },
+        "children": [
+          { "element": "a", "innerHTML": "Home", "attributes": { "href": "/" } },
+          { "element": "a", "innerHTML": "About", "attributes": { "href": "/about" } }
+        ]
+      }
+    ]
+  }
+}
