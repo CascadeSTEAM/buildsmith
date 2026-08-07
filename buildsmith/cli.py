@@ -58,6 +58,7 @@ def cmd_clone(args: argparse.Namespace) -> int:
         extract_site,
         fetch_assets,
         replicate,
+        save_crawl,
     )
 
     site_dir = project_root() / "sites" / args.site
@@ -66,8 +67,7 @@ def cmd_clone(args: argparse.Namespace) -> int:
 
     crawl = crawl_site(args.source, max_pages=args.max_pages,
                        ignore_robots=args.ignore_robots, render=args.render)
-    for route, html in crawl.pages.items():
-        (crawl_dir / ((route or "index") + ".html")).write_text(html, encoding="utf-8")
+    save_crawl(crawl, crawl_dir)
     fetch_assets(crawl, site_dir / "assets")
     print(crawl.summary())
 

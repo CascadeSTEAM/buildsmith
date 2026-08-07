@@ -36,7 +36,7 @@ from pathlib import Path
 
 from buildsmith.errors import CouldNotCheck
 
-__all__ = ["CrawlResult", "crawl_local", "crawl_site", "fetch_assets", "route_for"]
+__all__ = ["CrawlResult", "crawl_local", "crawl_site", "fetch_assets", "route_for", "save_crawl"]
 
 USER_AGENT = "buildsmith-replicate/0.1 (+site replication; contact the site owner)"
 
@@ -168,6 +168,19 @@ def _links(html: str, base: str) -> tuple[set[str], set[str]]:
             assets.add(urllib.parse.urljoin(base, url))
 
     return pages, assets
+
+
+def save_crawl(result: CrawlResult, directory: str | Path) -> None:
+    """Write crawled pages to disk the way crawl_local reads them back.
+
+    Routes nest (`s/gallery`), so every write makes its parents first — the
+    first nested route ever crawled crashed the clone for want of a mkdir.
+    """
+    root = Path(directory)
+    for route, html in result.pages.items():
+        path = root / ((route or "index") + ".html")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(html, encoding="utf-8")
 
 
 def crawl_local(directory: str | Path) -> CrawlResult:

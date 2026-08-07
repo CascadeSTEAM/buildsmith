@@ -25,6 +25,7 @@ from buildsmith.workflows.replicate.crawl import (  # noqa: E402
     CrawlResult,
     crawl_site,
     route_for,
+    save_crawl,
 )
 
 
@@ -290,6 +291,21 @@ class ShellCrawlsRefuse(unittest.TestCase):
             opener=self._opener_for(
                 {"/": "<html><body><p>Closed for the season.</p></body></html>"}))
         self.assertEqual(len(result.pages), 1)
+
+
+class NestedRoutesSurviveSaving(unittest.TestCase):
+    """#7 — the first nested route ever crawled crashed the clone: the write
+    loop never made parent directories, though crawl_local could always read
+    them back. save_crawl must round-trip whatever crawl_site produces."""
+
+    def test_nested_routes_write_and_read_back(self):
+        result = CrawlResult()
+        result.pages = {"": "<p>home</p>", "menu": "<p>menu</p>",
+                        "s/gallery": "<p>pics</p>"}
+        with tempfile.TemporaryDirectory() as tmp:
+            save_crawl(result, tmp)
+            back = crawl_local(tmp)
+        self.assertEqual(set(back.pages), set(result.pages))
 
 
 class RoutesSurviveTheFilesystem(unittest.TestCase):

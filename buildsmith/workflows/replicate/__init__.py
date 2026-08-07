@@ -10,6 +10,7 @@ from buildsmith.workflows.replicate.crawl import (
     crawl_local,
     crawl_site,
     fetch_assets,
+    save_crawl,
 )
 from buildsmith.workflows.replicate.features import Inventory, extract_site
 from buildsmith.workflows.replicate.htmlblocks import (
@@ -28,6 +29,7 @@ __all__ = [
     "crawl_local",
     "crawl_site",
     "fetch_assets",
+    "save_crawl",
     "emit",
     "html_to_blocks",
     "replicate",
