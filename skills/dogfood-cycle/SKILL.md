@@ -14,6 +14,12 @@ full dev cycle.
 This is a working mode, not a phase. It is what you do *instead of* declaring
 something done because its tests pass.
 
+It has a formal cousin: the **dogfood phase** (ADR-011), run once per release
+candidate (`vX.Y.Z-rc.N`). Same activity, opposite discipline — the phase
+*logs* every finding as a prioritized GitHub issue and fixes only blockers,
+so it measures the product instead of changing it mid-measurement. Issue
+text is public: genericise like a commit message.
+
 ## Why it earns its place
 
 One pass against a single live site found four defects that a green test suite

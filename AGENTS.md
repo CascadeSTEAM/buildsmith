@@ -131,7 +131,7 @@ and it is not "if this looks risky".
 | `builder-replicate` | W1: faithful full-site copy, routes preserved |
 | `builder-golive` | go-live choreography; execution belongs to OpsKit |
 | `builder-optimize` | W3: builderize a site in the sandbox — baseline, transform, oracle (ADR-009) |
-| `dogfood-cycle` | run it for real, fail, fix, retry until MVP |
+| `dogfood-cycle` | run it for real, fail, fix, retry until MVP; as a release phase, log-don't-fix (ADR-011) |
 
 Each one's first instruction is to load OpsKit's `frappe-access` skill for the
 access-path decision. A new skill is registered in this table in the same commit
