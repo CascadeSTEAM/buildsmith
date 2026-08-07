@@ -293,6 +293,50 @@ class ShellCrawlsRefuse(unittest.TestCase):
         self.assertEqual(len(result.pages), 1)
 
 
+class HeadContentShipsJinjaSafe(unittest.TestCase):
+    """#14 — Builder renders head_html through Frappe's safe_render Jinja,
+    which refuses any string containing `.__` (and the three delimiters).
+    Real head content is full of both, so carried CSS/JS must ship as file
+    references; one inlined `window.__STATE__` 417s every route on the site."""
+
+    HTML = (
+        "<html><head>"
+        "<style>#lightbox { position: fixed } .__util { color: red }</style>"
+        "<script>window.__STATE__ = {};</script>"
+        "</head><body><div class='a'>x</div></body></html>"
+    )
+
+    def test_with_assets_dir_head_html_is_references_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(self.HTML)
+            assets = Path(tmp) / "assets"
+            result = replicate(root, site="example", assets_dir=assets)
+            head = result.pages[0].head_html
+            for marker in ("{{", "{%", "{#", ".__"):
+                self.assertNotIn(marker, head, marker)
+            self.assertIn("/files/example-head-", head)
+            written = sorted(f.name for f in assets.iterdir())
+            self.assertTrue(any(n.endswith(".css") for n in written), written)
+            self.assertTrue(any(n.endswith(".js") for n in written), written)
+            # The bytes the browser gets are the source's, not a rewrite.
+            js = next(f for f in assets.iterdir() if f.suffix == ".js")
+            self.assertIn("window.__STATE__", js.read_text())
+
+    def test_without_assets_dir_hostile_inline_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(self.HTML)
+            result = replicate(root, site="example")
+            # The route is rejected and says why, rather than emitting a page
+            # that 417s at first view.
+            self.assertEqual(len(result.pages), 0)
+            self.assertTrue(any("safe_render" in w for w in result.warnings),
+                            result.warnings)
+
+
 class NestedRoutesSurviveSaving(unittest.TestCase):
     """#7 — the first nested route ever crawled crashed the clone: the write
     loop never made parent directories, though crawl_local could always read

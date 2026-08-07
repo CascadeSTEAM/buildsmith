@@ -194,7 +194,9 @@ def replicate(
                     published=publish,
                     project_folder=project_folder,
                     favicon=favicon,
-                    head_html=_head_html_for(converted),
+                    head_html=_head_html_for(
+                        converted, site=site, route=route,
+                        assets_dir=Path(assets_dir) if assets_dir else None),
                     scripts=converted.scripts,
                 )
             )
@@ -237,25 +239,70 @@ def _placeholder_template(site: str) -> Page:
     return _PLACEHOLDER[site]
 
 
-def _head_html_for(converted) -> str:
-    """Rebuild the head content the source page carried.
+#: Sequences Frappe's Jinja refuses. `safe_render` rejects any template
+#: containing `.__` before it even compiles, and the three delimiters make a
+#: 360 KB stylesheet a syntax error. One hit = HTTP 417 on every route (#14).
+_JINJA_HOSTILE = ("{{", "{%", "{#", ".__")
 
-    Both the leftover CSS and the page's own scripts go here, because that is
-    where the source keeps them — its inline scripts sit inside `</head>`.
 
-    The tempting alternative, `Builder Client Script` records, is the "native"
-    home for page JS and does not work for a page like this: Builder emits the
-    client-script include only from a block whose element is `body`, and a page
-    whose root block is a `div` never has one. The scripts were created, linked,
-    and silently never rendered — which is how a hover menu and a lightbox both
-    went missing while every count looked right.
+def _head_html_for(converted, *, site: str, route: str,
+                   assets_dir: Path | None) -> str:
+    """Rebuild the head content the source page carried — as references.
+
+    Both the leftover CSS and the page's own scripts belong to the page,
+    because that is where the source keeps them — its inline scripts sit
+    inside `</head>`.
+
+    Two constraints shape the *how*:
+
+    - `Builder Client Script` records are the "native" home for page JS and
+      do not work for a page like this: Builder emits the client-script
+      include only from a block whose element is `body`, and a page whose
+      root block is a `div` never has one. The scripts were created, linked,
+      and silently never rendered — which is how a hover menu and a lightbox
+      both went missing while every count looked right (BS-016).
+    - Builder renders `head_html` through Frappe's Jinja with `safe_render`,
+      which refuses any string containing `.__` — and real head content is
+      full of it (`window.__STATE__`, `.__utility-class`). Inlining the
+      content 417s every route on the site (#14).
+
+    So the content ships as *files* next to the other crawl assets — the
+    loader already publishes that directory at `/files/` — and `head_html`
+    carries only reference tags, which are Jinja-inert. The browser executes
+    the same bytes either way. Inline emission survives only for asset-less
+    conversions, and only when the content is provably Jinja-safe.
     """
     parts = []
+    slug = (route or "index").replace("/", "-")
+    if assets_dir is not None:
+        assets_dir = Path(assets_dir)
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        if converted.leftover_css:
+            name = f"{site}-head-{slug}.css"
+            (assets_dir / name).write_text(converted.leftover_css,
+                                           encoding="utf-8")
+            parts.append(f'<link rel="stylesheet" href="/files/{name}">')
+        for n, script in enumerate(converted.scripts):
+            name = f"{site}-head-{slug}-{n}.js"
+            (assets_dir / name).write_text(script.strip() + "\n",
+                                           encoding="utf-8")
+            parts.append(f'<script src="/files/{name}"></script>')
+        return "\n".join(parts)
+
     if converted.leftover_css:
         parts.append(f"<style>\n{converted.leftover_css}\n</style>")
     for script in converted.scripts:
         parts.append(f"<script>\n{script.strip()}\n</script>")
-    return "\n".join(parts)
+    head = "\n".join(parts)
+    for marker in _JINJA_HOSTILE:
+        if marker in head:
+            raise ConversionError(
+                f"{route or '/'}: inline head content contains {marker!r}, "
+                "which Frappe's safe_render refuses — the page would 417 on "
+                "every view (#14). Convert with an assets_dir so the content "
+                "ships as files instead."
+            )
+    return head
 
 
 def _favicon_for(html: str) -> str | None:

@@ -435,6 +435,32 @@ is visible to every process. So TRAP-015's stale-route 403 does **not** need a
 separate `bench clear-cache` when loading over REST. Verified against the pin,
 not assumed.
 
+## — TRAP-018 — Builder Jinja-renders `head_html`/`body_html`, and `safe_render` refuses `.__`
+
+**Symptom.** Every published route on the site returns HTTP 417 with an empty
+"Server Error" page. The pages are published, conformant, and lock-free;
+`/login` and the editor render fine. No traceback anywhere — the error page's
+`<pre>` slot is empty and nothing reaches the logs.
+
+**Cause.** `BuilderPage.set_style_and_script` passes `head_html` (and
+`body_html`, and Builder Settings' copies of both) through
+`frappe.utils.jinja.render_template`. That function's `safe_render` rejects any
+template containing the substring `.__` before compiling, and the Jinja
+delimiters (`{{`, `{%`, `{#`) must parse. Real-world carried content trips
+both constantly: `window.__STATE__` in a bootstrap script, `.__utility`
+classes in minified CSS. One hit anywhere in the concatenation and *every*
+page 417s, because the failure is per-render, not per-record.
+
+**Rule.** Never inline foreign CSS/JS into `head_html`/`body_html`. Ship the
+bytes as files (the loader publishes `sites/<site>/assets/` at `/files/`) and
+reference them with `<link>`/`<script src>` tags, which are Jinja-inert.
+`_head_html_for` does this whenever an `assets_dir` exists and refuses
+Jinja-hostile inline content otherwise; `tests/test_replicate.py`
+(HeadContentShipsJinjaSafe) pins both. Diagnosis shortcut for next time: 417
+with published pages means ValidationError — probe with
+`PathResolver(route).resolve()[1].render()` in a bench console, which raises
+where the web path swallows.
+
 ---
 
 ## Adding a trap
