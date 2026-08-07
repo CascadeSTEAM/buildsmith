@@ -99,10 +99,11 @@ Concretely:
 
 Every release is cut twice. First a candidate, tagged `vX.Y.Z-rc.N` — then
 a **dogfood phase**: the candidate gets used for real work, and every
-finding becomes an issue with a priority label (`P0-blocker`/`P1`/`P2`/`P3`
-+ `dogfood`). Only blockers get fixed during the phase; everything else is
-triaged after. The plain `vX.Y.Z` tag is cut when no open P0/P1 remains.
-The full reasoning lives in `docs/decisions/011-dogfood-phase.md`.
+finding becomes an issue in the *current milestone* with a priority label
+(`P0-blocker`/`P1`/`P2`/`P3` + `dogfood`). Only blockers get fixed during
+the phase; triage runs continuously, moving non-gating issues to a later
+milestone. The plain `vX.Y.Z` tag is cut when the current milestone has
+zero open issues. Full reasoning: `docs/decisions/011-dogfood-phase.md`.
 
 One rule for issues, same as commits: they're public, so nothing
 client-identifying goes in them — "a real site", never whose.

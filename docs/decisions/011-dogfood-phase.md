@@ -37,11 +37,13 @@ ones that live in the gaps between components.
    branch names: nothing client-identifying, ever — `a real site`, `<site>`,
    bucketed figures. The guard cannot read what gets typed into a browser;
    this one is on the writer.
-5. **Priority is assigned at filing; triage happens at phase end.** P1 means
-   "fix before the release tag", P2 "fix soon, does not gate the release",
-   P3 "nice to have". The phase ends with a triage pass over everything
-   labeled `dogfood`, and the release tag is cut only when no open P0/P1
-   remains against the candidate.
+5. **Milestones are the gate.** Every finding is filed into the *current*
+   milestone with a priority label (P1 "fix before the release tag", P2
+   "fix soon", P3 "nice to have"). Triage runs continuously during the
+   phase: an issue that should not gate this release is *moved to a later
+   milestone*, not closed. **The phase ends when the current milestone has
+   zero open issues** — everything in it was either fixed or consciously
+   re-homed — and only then is the plain release tag cut.
 
 ## What this does not change
 
