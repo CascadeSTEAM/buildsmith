@@ -64,7 +64,8 @@ def cmd_clone(args: argparse.Namespace) -> int:
     crawl_dir = site_dir / "crawl"
     crawl_dir.mkdir(parents=True, exist_ok=True)
 
-    crawl = crawl_site(args.source, max_pages=args.max_pages, ignore_robots=args.ignore_robots)
+    crawl = crawl_site(args.source, max_pages=args.max_pages,
+                       ignore_robots=args.ignore_robots, render=args.render)
     for route, html in crawl.pages.items():
         (crawl_dir / ((route or "index") + ".html")).write_text(html, encoding="utf-8")
     fetch_assets(crawl, site_dir / "assets")
@@ -585,6 +586,9 @@ def build_parser() -> argparse.ArgumentParser:
         return p
 
     p = add("clone", cmd_clone, "crawl a site, convert it, load it into dev")
+    p.add_argument("--render", action="store_true",
+                   help="crawl through a real browser — required for sites "
+                        "that assemble themselves client-side (#5)")
     p.add_argument("--site", required=True)
     p.add_argument("--source", required=True)
     p.add_argument("--project-folder", default="buildsmith")

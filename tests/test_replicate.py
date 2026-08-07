@@ -21,7 +21,11 @@ from buildsmith.workflows.replicate import (  # noqa: E402
     html_to_blocks,
     replicate,
 )
-from buildsmith.workflows.replicate.crawl import CrawlResult, route_for  # noqa: E402
+from buildsmith.workflows.replicate.crawl import (  # noqa: E402
+    CrawlResult,
+    crawl_site,
+    route_for,
+)
 
 
 def texts(blocks):
@@ -227,6 +231,65 @@ class Replicating(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShellCrawlsRefuse(unittest.TestCase):
+    """The success-shaped failure (#5): a client-side-rendered site serves a
+    bootstrap shell; a static crawl of it must refuse (exit 2), not convert a
+    husk at 100%. Thresholds are pinned against the husk that motivated this:
+    51 KB of markup, 15 scripts, 22 visible characters."""
+
+    SHELL = ("<html><head><title>Home | A Site</title>"
+             + "<script src=\"/a.js\"></script>" * 6
+             + "<style>" + ("body{}" * 400) + "</style></head>"
+             + "<body><div id=\"root\"></div>"
+             + "<script>" + ("var x=1;" * 400) + "</script></body></html>")
+
+    CONTENT = ("<html><body><h1>Hours</h1>"
+               + "<p>Open every day, come on in.</p>" * 30
+               + "</body></html>")
+
+    @staticmethod
+    def _opener_for(pages):
+        def fetch(url, timeout):
+            from urllib.parse import urlparse
+            return "text/html", pages[urlparse(url).path or "/"]
+        return fetch
+
+    def test_an_all_shell_crawl_refuses_and_names_the_fix(self):
+        from buildsmith.errors import CouldNotCheck
+        with self.assertRaises(CouldNotCheck) as cm:
+            crawl_site("http://example.test/",
+                       opener=self._opener_for({"/": self.SHELL}))
+        self.assertIn("--render", str(cm.exception.message))
+
+    def test_a_rendered_all_shell_crawl_still_refuses(self):
+        """--render that still yields husks proved nothing; it must not
+        suggest --render as the fix for itself."""
+        from buildsmith.errors import CouldNotCheck
+        with self.assertRaises(CouldNotCheck) as cm:
+            crawl_site("http://example.test/",
+                       opener=self._opener_for({"/": self.SHELL}), render=True)
+        self.assertNotIn("--render", str(cm.exception.message))
+
+    def test_one_real_page_among_shells_passes(self):
+        """The tripwire is all-or-nothing on purpose: partial shells are a
+        content gap the feature inventory reports, not a refused crawl."""
+        shell = self.SHELL.replace("</body>",
+                                   "<a href=\"/hours\">hours</a></body>")
+        result = crawl_site(
+            "http://example.test/",
+            opener=self._opener_for({"/": shell, "/hours": self.CONTENT}))
+        self.assertEqual(len(result.pages), 2)
+
+    def test_a_small_plain_page_is_not_a_shell(self):
+        """A genuinely minimal page (short text, no script pile) must never
+        trip this — the heuristic keys on machinery, not brevity."""
+        result = crawl_site(
+            "http://example.test/",
+            opener=self._opener_for(
+                {"/": "<html><body><p>Closed for the season.</p></body></html>"}))
+        self.assertEqual(len(result.pages), 1)
 
 
 class RoutesSurviveTheFilesystem(unittest.TestCase):

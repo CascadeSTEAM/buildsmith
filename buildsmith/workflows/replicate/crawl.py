@@ -25,12 +25,16 @@ and how you re-convert a crawl without hitting the network again.
 
 from __future__ import annotations
 
+import contextlib
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 import urllib.robotparser
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from buildsmith.errors import CouldNotCheck
 
 __all__ = ["CrawlResult", "crawl_local", "crawl_site", "fetch_assets", "route_for"]
 
@@ -229,13 +233,33 @@ def crawl_site(
     ignore_robots: bool = False,
     timeout: float = 15.0,
     opener=None,
+    render: bool = False,
 ) -> CrawlResult:
     """Crawl a site breadth-first, same origin only.
 
-    `opener` is injectable so the tests can run without a network.
+    `opener` is injectable so the tests can run without a network. `render`
+    fetches every page through a real browser instead of plain HTTP — the
+    only honest way to crawl a site that assembles itself client-side.
     """
+    if render and opener is None:
+        with _rendered_fetcher(timeout) as fetch:
+            return _crawl(base_url, fetch, max_pages=max_pages,
+                          ignore_robots=ignore_robots, timeout=timeout,
+                          render=True)
+    return _crawl(base_url, opener or _fetch, max_pages=max_pages,
+                  ignore_robots=ignore_robots, timeout=timeout, render=render)
+
+
+def _crawl(
+    base_url: str,
+    fetch,
+    *,
+    max_pages: int,
+    ignore_robots: bool,
+    timeout: float,
+    render: bool,
+) -> CrawlResult:
     result = CrawlResult()
-    fetch = opener or _fetch
 
     robots = None
     if not ignore_robots:
@@ -288,7 +312,82 @@ def crawl_site(
             f"{base_url}: nothing was crawled. Check the URL and robots.txt — an empty "
             "crawl would pass downstream as a successfully replicated empty site."
         )
+
+    # The success-shaped failure (#5): a client-side-rendered site serves a
+    # bootstrap shell, the crawl "succeeds", and the replication converts a
+    # husk at 100%. If every page looks like a shell, this crawl proved
+    # nothing — refuse rather than hand downstream a confident husk.
+    shells = [route for route, html in result.pages.items() if _looks_like_shell(html)]
+    if shells and len(shells) == len(result.pages):
+        if render:
+            raise CouldNotCheck(
+                f"{base_url}: even the rendered crawl came back looking like an "
+                "empty shell (all pages: heavy markup, several scripts, almost "
+                "no visible text). The site may need interaction or a longer "
+                "settle; nothing here is safe to convert."
+            )
+        raise CouldNotCheck(
+            f"{base_url}: every crawled page looks like a JavaScript bootstrap "
+            "shell — heavy markup, several scripts, almost no visible text. A "
+            "static fetch cannot see this site's content. Retry with --render, "
+            "which crawls what a real browser renders."
+        )
     return result
+
+
+#: A page is shell-suspect when it is all machinery and no words: kilobytes of
+#: markup, a pile of scripts, and less visible text than a business card. The
+#: thresholds come from the husk that motivated this (51 KB, 15 scripts, 22
+#: visible characters) with a wide safety margin against real minimal pages.
+_SHELL_MAX_VISIBLE = 200
+_SHELL_MIN_SCRIPTS = 3
+_SHELL_MIN_BYTES = 5000
+
+
+def _visible_text(html: str) -> str:
+    stripped = re.sub(r"<(script|style|noscript|template)\b.*?</\1>", " ", html,
+                      flags=re.S | re.I)
+    stripped = re.sub(r"<[^>]+>", " ", stripped)
+    return " ".join(stripped.split())
+
+
+def _looks_like_shell(html: str) -> bool:
+    return (
+        len(html) >= _SHELL_MIN_BYTES
+        and len(re.findall(r"<script\b", html, re.I)) >= _SHELL_MIN_SCRIPTS
+        and len(_visible_text(html)) < _SHELL_MAX_VISIBLE
+    )
+
+
+@contextlib.contextmanager
+def _rendered_fetcher(timeout: float):
+    """One browser for the whole crawl, yielded as a fetch(url, timeout) callable.
+
+    Missing playwright refuses (exit 2) rather than quietly degrading to the
+    static fetch — a degraded crawl is exactly the husk the shell tripwire
+    exists to catch, one layer too late.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise CouldNotCheck(
+            "--render needs playwright with Chromium (install.py --dev sets "
+            "both up). Refusing to fall back to the static fetch: that is the "
+            "exact crawl --render exists to avoid."
+        ) from exc
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(user_agent=USER_AGENT)
+        try:
+            def fetch(url: str, _timeout: float) -> tuple[str, str]:
+                page.goto(url, wait_until="networkidle",
+                          timeout=int(timeout * 1000))
+                return "text/html", page.content()
+
+            yield fetch
+        finally:
+            browser.close()
 
 
 def _fetch(url: str, timeout: float) -> tuple[str, str]:
