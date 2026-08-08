@@ -246,8 +246,12 @@ def capture(site: str, *, target: str = "sandbox.localhost",
         existing.unlink()
 
     for page in state["pages"]:
-        slug = (page["route"] or "home").replace("/", "_")
-        (out / "pages" / f"{slug}.json").write_text(json.dumps(page, indent=2) + "\n")
+        # Keyed by `name`, the doctype's own unique field (TRAP-012) — not by
+        # route. Two distinct routes can slugify to the same string (`a/b` and
+        # `a_b`, or a literal route `home` colliding with the empty-route
+        # fallback), and a route-derived filename silently overwrote one
+        # page's capture with another's (#27).
+        (out / "pages" / f"{page['name']}.json").write_text(json.dumps(page, indent=2) + "\n")
     for component in state["components"]:
         (out / "components" / f"{component['component_id']}.json").write_text(
             json.dumps(component, indent=2) + "\n"
