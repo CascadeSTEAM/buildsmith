@@ -195,7 +195,7 @@ def replicate(
                     project_folder=project_folder,
                     favicon=favicon,
                     head_html=_head_html_for(
-                        converted, site=site, route=route,
+                        converted, site=site, route=route, html=html,
                         assets_dir=Path(assets_dir) if assets_dir else None),
                     scripts=converted.scripts,
                 )
@@ -245,7 +245,46 @@ def _placeholder_template(site: str) -> Page:
 _JINJA_HOSTILE = ("{{", "{%", "{#", ".__")
 
 
-def _head_html_for(converted, *, site: str, route: str,
+#: rel="icon"/"shortcut icon" stay out of the head_html lift — that one
+#: already becomes `page.favicon`, a single Attach-Image field with no
+#: room for the rest of the icon family.
+_PRIMARY_ICON_RELS = {"icon", "shortcut icon"}
+
+
+def _icon_links_for(html: str) -> list[tuple[str, str]]:
+    """Every `<link>` in the icon rel family, beyond the primary favicon.
+
+    apple-touch-icon (and its -precomposed variant), mask-icon, and any
+    other icon-shaped rel Apple/Safari/PWA markup uses — all skipped by
+    the converter as non-content, correctly, since none of them are
+    blocks. But each is unmistakably part of what the site looks like on
+    the device that reads that specific rel (#16) — `verify`'s browser
+    check reported the resulting misses directly ("asset missing from the
+    rendered page: icon_180x180_ios…"): the file was fetched by the crawl,
+    it just had nothing in the converted page pointing at it.
+    """
+    import re
+
+    links: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for tag in re.finditer(r"<link\b[^>]*>", html, re.I):
+        markup = tag.group(0)
+        rel_match = re.search(r"""\brel\s*=\s*["']([^"']*)""", markup, re.I)
+        href_match = re.search(r"""\bhref\s*=\s*["']([^"']+)""", markup, re.I)
+        if not rel_match or not href_match:
+            continue
+        rel = rel_match.group(1).strip()
+        if "icon" not in rel.lower() or rel.lower() in _PRIMARY_ICON_RELS:
+            continue
+        href = href_match.group(1)
+        if href in seen:
+            continue
+        seen.add(href)
+        links.append((rel, href))
+    return links
+
+
+def _head_html_for(converted, *, site: str, route: str, html: str,
                    assets_dir: Path | None) -> str:
     """Rebuild the head content the source page carried — as references.
 
@@ -287,6 +326,13 @@ def _head_html_for(converted, *, site: str, route: str,
             (assets_dir / name).write_text(script.strip() + "\n",
                                            encoding="utf-8")
             parts.append(f'<script src="/files/{name}"></script>')
+        for rel, href in _icon_links_for(html):
+            # Not a new file to write — fetch_assets already saved this
+            # one under its basename, same convention _css_loader_for
+            # matches. Only a reference is missing, not the file.
+            name = Path(urllib.parse.unquote(urllib.parse.urlparse(href).path)).name
+            if name:
+                parts.append(f'<link rel="{rel}" href="/files/{name}">')
         return "\n".join(parts)
 
     if converted.leftover_css:

@@ -604,6 +604,63 @@ class HeadContentShipsJinjaSafe(unittest.TestCase):
                             result.warnings)
 
 
+class IconFamilyIsLiftedIntoHeadHtml(unittest.TestCase):
+    """#16: apple-touch/manifest icons are already crawled and fetched (the
+    asset-discovery regex matches any rel containing "icon"), but nothing
+    in the converted page ever referenced them — verify's browser check
+    reported exactly that: "asset missing from the rendered page"."""
+
+    HTML = (
+        "<html><head>"
+        '<link rel="icon" href="/favicon.ico">'
+        '<link rel="apple-touch-icon" sizes="180x180" '
+        'href="/icon_180x180_ios.png">'
+        '<link rel="apple-touch-icon-precomposed" href="/icon_precomposed.png">'
+        '<link rel="mask-icon" href="/icon_mask.svg" color="#000">'
+        "</head><body><div class='a'>x</div></body></html>"
+    )
+
+    def test_the_icon_family_becomes_head_html_references(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(self.HTML)
+            assets = Path(tmp) / "assets"
+            result = replicate(root, site="example", assets_dir=assets)
+            head = result.pages[0].head_html
+        self.assertIn('rel="apple-touch-icon"', head)
+        self.assertIn("/files/icon_180x180_ios.png", head)
+        self.assertIn('rel="apple-touch-icon-precomposed"', head)
+        self.assertIn("/files/icon_precomposed.png", head)
+        self.assertIn('rel="mask-icon"', head)
+        self.assertIn("/files/icon_mask.svg", head)
+
+    def test_the_primary_favicon_is_not_duplicated_in_head_html(self):
+        # rel="icon" already becomes page.favicon — a second <link
+        # rel="icon"> in head_html would be redundant, not wrong, but the
+        # single-value Attach-Image field is the one source of truth here.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(self.HTML)
+            assets = Path(tmp) / "assets"
+            result = replicate(root, site="example", assets_dir=assets)
+            head = result.pages[0].head_html
+        self.assertNotIn("favicon.ico", head)
+        self.assertEqual(result.pages[0].favicon, "/favicon.ico")
+
+    def test_without_assets_dir_the_icon_family_is_not_referenced(self):
+        # No local files to point at without assets_dir — same honest
+        # limitation the CSS/JS file-reference path already has.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(self.HTML)
+            result = replicate(root, site="example")
+            head = result.pages[0].head_html
+        self.assertNotIn("apple-touch-icon", head)
+
+
 class NestedRoutesSurviveSaving(unittest.TestCase):
     """#7 — the first nested route ever crawled crashed the clone: the write
     loop never made parent directories, though crawl_local could always read
