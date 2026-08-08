@@ -103,6 +103,17 @@ def collect_script_records(site_root: Path) -> tuple[list[dict], str]:
     return records, source
 
 
+def scripts_unscanned(scripts_scanned: int | str) -> bool:
+    """True when a manifest's `scripts_scanned` is the loud UNSCANNED
+    marker rather than a real count (see `collect_script_records`).
+
+    One place both `cli.py`'s baseline summary and `status.py`'s status
+    view check this, so a future change to the sentinel's shape can't
+    update one call site and silently miss the other (#17's own review).
+    """
+    return isinstance(scripts_scanned, str)
+
+
 def scan_scripts(records: list[dict]) -> dict:
     """Scan every Builder Client Script record; see scan_script."""
     scans = [scan_script(r.get("name", "?"), r.get("script_type", ""),
