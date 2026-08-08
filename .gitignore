@@ -7,12 +7,13 @@ sites/*
 sites/*/build/
 
 # Python
-# Trailing-slash patterns match only a directory — a symlink named .venv
-# (a real one slipped past both patterns and reached main, #37) needs the
-# bare form too.
-.venv/
+# Bare, not `.venv/` — a trailing slash matches only a directory, and a
+# symlink named .venv (a real one reached main, #37) needs the bare form,
+# which already covers a directory too. Keep it bare: a trailing-slash
+# pair added back "for directories" would look redundant and tempt a
+# future cleanup into deleting the one line that actually catches a
+# symlink, reopening #37.
 .venv
-venv/
 venv
 __pycache__/
 *.py[cod]
