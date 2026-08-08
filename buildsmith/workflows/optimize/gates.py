@@ -26,6 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 __all__ = [
+    "any_pending",
     "assert_no_pending",
     "pending",
     "record_apply",
@@ -118,6 +119,29 @@ def record_oracle(site: str, ok: bool, failed: int = 0) -> int:
 def pending(site: str) -> list[dict]:
     """Entries applied to the sandbox but never proved by a passing oracle."""
     return [entry for entry in _load(site)["entries"] if _is_pending(entry)]
+
+
+def any_pending() -> dict[str, list[dict]]:
+    """Every site with an applied-but-unproved transform, ledger by ledger.
+
+    No entry records *which* Frappe host it was applied to — every optimize
+    transform defaults to, and today can only target, `sandbox.localhost` —
+    so "pending anywhere" already means "pending on the shared sandbox".
+    A tool about to mutate that sandbox in a way that isn't scoped to its
+    own fixtures (#20) should refuse while this is non-empty, the same way
+    `assert_no_pending` refuses a re-baseline.
+    """
+    sites_dir = ROOT / "sites"
+    if not sites_dir.is_dir():
+        return {}
+    found = {}
+    for site_dir in sorted(sites_dir.iterdir()):
+        if not site_dir.is_dir():
+            continue
+        open_entries = pending(site_dir.name)
+        if open_entries:
+            found[site_dir.name] = open_entries
+    return found
 
 
 def assert_no_pending(site: str, *, force: bool = False) -> list[dict]:

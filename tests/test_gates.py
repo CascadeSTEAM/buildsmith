@@ -150,5 +150,43 @@ class BaselineRefusesUnprovenState(unittest.TestCase):
         self.assertIn("oracle", message)
 
 
+class AnyPendingTest(unittest.TestCase):
+    """#20: any tool about to mutate the shared sandbox needs one place to
+    ask "is anything applied-but-unproved right now", across every site."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self._old_root = gates.ROOT
+        gates.ROOT = self.root
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(setattr, gates, "ROOT", self._old_root)
+
+    def test_nothing_pending_when_no_sites_exist(self):
+        self.assertEqual(gates.any_pending(), {})
+
+    def test_an_unproved_apply_on_one_site_is_found(self):
+        gates.record_apply("x", "tokenize")
+        found = gates.any_pending()
+        self.assertEqual(list(found), ["x"])
+        self.assertEqual([e["transform"] for e in found["x"]], ["tokenize"])
+
+    def test_a_settled_site_does_not_appear(self):
+        gates.record_apply("x", "tokenize")
+        gates.record_oracle("x", ok=True)
+        self.assertEqual(gates.any_pending(), {})
+
+    def test_a_waived_site_does_not_appear(self):
+        gates.record_apply("x", "tokenize")
+        gates.assert_no_pending("x", force=True)
+        self.assertEqual(gates.any_pending(), {})
+
+    def test_pending_on_one_site_does_not_hide_a_settled_one(self):
+        gates.record_apply("settled", "fonts")
+        gates.record_oracle("settled", ok=True)
+        gates.record_apply("dirty", "collapse")
+        self.assertEqual(list(gates.any_pending()), ["dirty"])
+
+
 if __name__ == "__main__":
     unittest.main()
