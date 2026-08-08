@@ -118,12 +118,17 @@ class DoesNotLie(unittest.TestCase):
     def test_an_incomplete_export_raises_rather_than_passing(self):
         # Pages use the component but the export omits it: comparing against
         # nothing would pass vacuously.
-        with self.assertRaises(ValueError) as caught:
+        with self.assertRaises(CouldNotCheck) as caught:
             simulate(
                 {"components": {}, "pages": [page("home")]},
                 [{"component_id": "site-header", "block": component()}],
             )
         self.assertIn("incomplete", str(caught.exception))
+
+    def test_a_payload_with_no_component_id_is_could_not_check(self):
+        with self.assertRaises(CouldNotCheck) as caught:
+            simulate(state([page("home")]), [{"block": component()}])
+        self.assertIn("component_id", str(caught.exception))
 
     def test_pre_existing_damage_is_not_blamed_on_the_payload(self):
         # This page's shell already matched nothing before the change.

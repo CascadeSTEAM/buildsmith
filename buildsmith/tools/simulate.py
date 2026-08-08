@@ -297,7 +297,7 @@ def simulate(state: dict, payloads: list[dict]) -> Report:
     for payload in payloads:
         component_id = payload.get("component_id") or payload.get("name")
         if not component_id:
-            raise ValueError("a payload needs a component_id")
+            raise CouldNotCheck("a payload needs a component_id")
         report.components_checked.append(component_id)
 
         current = components.get(component_id)
@@ -307,7 +307,7 @@ def simulate(state: dict, payloads: list[dict]) -> Report:
             # here and only one of them is safe, so check before assuming.
             orphaned = pages_using(pages, component_id)
             if orphaned:
-                raise ValueError(
+                raise CouldNotCheck(
                     f"'{component_id}' is not in the state export's components, but "
                     f"{len(orphaned)} page(s) already use it "
                     f"({', '.join(p.get('name', '?') for p in orphaned[:3])}). The export is "
