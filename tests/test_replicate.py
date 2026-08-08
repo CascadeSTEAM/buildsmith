@@ -328,6 +328,28 @@ class FetchAssetsPrefersCapturedBytes(unittest.TestCase):
             self.assertEqual((Path(d) / "logo.png").read_bytes(), b"already-here")
 
 
+class _FakeRequest:
+    """A minimal stand-in for playwright's Request — just enough shape for
+    _capture_response's redirect-chain walk (.url, .resource_type,
+    .redirected_from)."""
+
+    def __init__(self, url, resource_type="image", redirected_from=None):
+        self.url = url
+        self.resource_type = resource_type
+        self.redirected_from = redirected_from
+
+
+class _FakeResponse:
+    def __init__(self, url, *, ok=True, resource_type="image",
+                 body=b"bytes", redirected_from=None):
+        self.ok = ok
+        self.request = _FakeRequest(url, resource_type, redirected_from)
+        self._body = body
+
+    def body(self):
+        return self._body
+
+
 class RenderedFetcherCapturesResponseBytes(unittest.TestCase):
     """The response filter, and the plumbing that gets captured bytes from
     the browser session into the returned CrawlResult — without needing a
@@ -347,6 +369,55 @@ class RenderedFetcherCapturesResponseBytes(unittest.TestCase):
         # ok=False means the browser ITSELF didn't get the asset either —
         # nothing to prefer over the (also doomed) static refetch.
         self.assertFalse(crawl_module._should_capture(False, "image"))
+
+    def test_a_direct_response_is_captured_under_its_own_url(self):
+        captured: dict = {}
+        response = _FakeResponse("http://example.test/logo.png", body=b"bytes")
+        total = crawl_module._capture_response(response, captured, 0)
+        self.assertEqual(captured, {"http://example.test/logo.png": b"bytes"})
+        self.assertEqual(total, len(b"bytes"))
+
+    def test_a_redirect_chain_is_captured_under_every_url_in_it(self):
+        # #12's review: a signed CDN typically 302s a stable url to a
+        # signed one. response.url is the signed (final) url, but the
+        # HTML — and fetch_assets' own lookup — reference the original.
+        # Both must end up in `captured`, or the lookup never hits.
+        original = _FakeRequest("http://cdn.example.test/img.png")
+        response = _FakeResponse(
+            "http://signed.example.test/img.png?token=abc",
+            body=b"real-bytes", redirected_from=original,
+        )
+        captured: dict = {}
+        crawl_module._capture_response(response, captured, 0)
+        self.assertEqual(captured["http://cdn.example.test/img.png"], b"real-bytes")
+        self.assertEqual(
+            captured["http://signed.example.test/img.png?token=abc"], b"real-bytes"
+        )
+
+    def test_a_non_asset_or_failed_response_does_not_change_the_total(self):
+        captured: dict = {}
+        total = crawl_module._capture_response(
+            _FakeResponse("http://example.test/x.js", resource_type="script"),
+            captured, 0,
+        )
+        self.assertEqual(captured, {})
+        self.assertEqual(total, 0)
+
+    def test_the_byte_cap_stops_new_captures_once_exceeded(self):
+        captured: dict = {}
+        response = _FakeResponse("http://example.test/huge.png", body=b"x" * 10)
+        total = crawl_module._capture_response(
+            response, captured, crawl_module._MAX_CAPTURED_BYTES
+        )
+        self.assertEqual(captured, {})
+        self.assertEqual(total, crawl_module._MAX_CAPTURED_BYTES)
+
+    def test_recapturing_the_same_url_does_not_double_count_bytes(self):
+        captured: dict = {}
+        response = _FakeResponse("http://example.test/logo.png", body=b"bytes")
+        total = crawl_module._capture_response(response, captured, 0)
+        total = crawl_module._capture_response(response, captured, total)
+        self.assertEqual(total, len(b"bytes"))
 
     def test_render_mode_merges_captured_bytes_into_the_result(self):
         # A fake _rendered_fetcher, patched in place of real playwright:

@@ -240,8 +240,11 @@ def fetch_assets(
             # use those bytes rather than hitting the network cold a second
             # time. A signed/protected CDN asset can 403 on that refetch
             # even though the browser had just loaded it moments earlier.
-            target.write_bytes(captured)
-            result.downloaded[url] = name
+            try:
+                target.write_bytes(captured)
+                result.downloaded[url] = name
+            except Exception as exc:  # noqa: BLE001 - a failed asset is a reportable gap
+                result.skipped.append(f"{url}: asset not downloaded — {exc}")
             continue
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -395,11 +398,50 @@ def _looks_like_shell(html: str) -> bool:
 #: insurance; the reported failure (#12) is CDN-protected images.
 _CAPTURED_RESOURCE_TYPES = frozenset({"image", "media", "font", "stylesheet"})
 
+#: Best-effort cap on total captured bytes for one render session (review
+#: on #12's own PR): unreferenced media the browser loads but no page ever
+#: links to (a carousel slide, a hover state) would otherwise accumulate
+#: for the whole multi-page crawl with nothing to evict it. Hitting this
+#: just means some assets fall back to fetch_assets' static refetch —
+#: exactly pre-#12 behaviour, not a new failure mode.
+_MAX_CAPTURED_BYTES = 200 * 1024 * 1024
+
 
 def _should_capture(ok: bool, resource_type: str) -> bool:
     """A pure predicate, factored out so the filter is testable without a
     real (or faked) playwright response object."""
     return ok and resource_type in _CAPTURED_RESOURCE_TYPES
+
+
+def _capture_response(response, captured: dict[str, bytes], captured_bytes: int) -> int:
+    """Register `response`'s body into `captured`, keyed by every url in
+    its redirect chain. Returns the updated running total of captured bytes.
+
+    A signed CDN typically 302s a stable url to a signed one; the browser's
+    own `response.url` is the signed (final) url, but the HTML — and
+    `result.assets`, and `fetch_assets`' own lookup — reference the
+    ORIGINAL, pre-redirect url. Capturing only the final url means the
+    lookup never hits for exactly the case #12 reports (review on #12's
+    own PR), so this walks `request.redirected_from` back through the
+    whole chain.
+
+    Takes and returns `captured_bytes` rather than closing over it, so the
+    redirect-walk and the size cap are testable with plain fake objects —
+    no real (or faked) playwright Response needed.
+    """
+    if not _should_capture(response.ok, response.request.resource_type):
+        return captured_bytes
+    if captured_bytes >= _MAX_CAPTURED_BYTES:
+        return captured_bytes
+    body = response.body()
+    request, seen = response.request, set()
+    while request is not None and request.url not in seen:
+        if request.url not in captured:
+            captured_bytes += len(body)
+        captured[request.url] = body
+        seen.add(request.url)
+        request = request.redirected_from
+    return captured_bytes
 
 
 @contextlib.contextmanager
@@ -429,13 +471,14 @@ def _rendered_fetcher(timeout: float):
         browser = playwright.chromium.launch()
         page = browser.new_page(user_agent=USER_AGENT)
         captured: dict[str, bytes] = {}
+        captured_bytes = 0
 
         def _on_response(response) -> None:
             # Best-effort: a response this can't read just falls through to
             # fetch_assets' own static-refetch fallback, same as today.
+            nonlocal captured_bytes
             try:
-                if _should_capture(response.ok, response.request.resource_type):
-                    captured[response.url] = response.body()
+                captured_bytes = _capture_response(response, captured, captured_bytes)
             except Exception:  # noqa: BLE001 - never let a listener crash the crawl
                 pass
 
