@@ -7,10 +7,12 @@ the difference between "nothing to convert" and "converted to nothing".
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -21,9 +23,11 @@ from buildsmith.workflows.replicate import (  # noqa: E402
     html_to_blocks,
     replicate,
 )
+from buildsmith.workflows.replicate import crawl as crawl_module  # noqa: E402
 from buildsmith.workflows.replicate.crawl import (  # noqa: E402
     CrawlResult,
     crawl_site,
+    fetch_assets,
     route_for,
     save_crawl,
 )
@@ -281,6 +285,88 @@ class Crawling(unittest.TestCase):
             with self.assertRaises(ValueError) as caught:
                 crawl_local(d)
         self.assertIn("empty site", str(caught.exception))
+
+
+class FetchAssetsPrefersCapturedBytes(unittest.TestCase):
+    """#12: a --render crawl's browser session already fetched every asset
+    once; a signed/protected CDN url can 403 on fetch_assets' own cold
+    static refetch even though the browser had just loaded it. Preferring
+    result.captured bytes when present avoids that second, doomed hit."""
+
+    def test_a_captured_url_is_written_without_touching_the_network(self):
+        result = CrawlResult(
+            assets={"http://example.test/logo.png"},
+            captured={"http://example.test/logo.png": b"\x89PNG-bytes"},
+        )
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch("urllib.request.urlopen",
+                        side_effect=AssertionError("must not hit the network")):
+            fetch_assets(result, d)
+            self.assertEqual((Path(d) / "logo.png").read_bytes(), b"\x89PNG-bytes")
+        self.assertEqual(result.downloaded["http://example.test/logo.png"], "logo.png")
+
+    def test_an_uncaptured_url_still_falls_back_to_a_static_fetch(self):
+        # Assets the browser never actually loaded (lazy, off-screen, a
+        # breakpoint that never triggered) get exactly today's behaviour.
+        result = CrawlResult(assets={"http://example.test/other.png"})
+        response = mock.MagicMock()
+        response.read.return_value = b"static-bytes"
+        response.__enter__.return_value = response
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch("urllib.request.urlopen", return_value=response):
+            fetch_assets(result, d)
+            self.assertEqual((Path(d) / "other.png").read_bytes(), b"static-bytes")
+
+    def test_an_existing_file_is_skipped_even_if_captured(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "logo.png").write_bytes(b"already-here")
+            result = CrawlResult(
+                assets={"http://example.test/logo.png"},
+                captured={"http://example.test/logo.png": b"would-overwrite"},
+            )
+            fetch_assets(result, d)
+            self.assertEqual((Path(d) / "logo.png").read_bytes(), b"already-here")
+
+
+class RenderedFetcherCapturesResponseBytes(unittest.TestCase):
+    """The response filter, and the plumbing that gets captured bytes from
+    the browser session into the returned CrawlResult — without needing a
+    real (or faked) playwright Response object for either."""
+
+    def test_only_asset_like_ok_responses_are_captured(self):
+        should_capture = crawl_module._should_capture
+        self.assertTrue(should_capture(True, "image"))
+        self.assertTrue(should_capture(True, "font"))
+        self.assertTrue(should_capture(True, "stylesheet"))
+        self.assertTrue(should_capture(True, "media"))
+        self.assertFalse(should_capture(True, "document"))
+        self.assertFalse(should_capture(True, "script"))
+        self.assertFalse(should_capture(True, "xhr"))
+
+    def test_a_failed_response_is_never_captured_even_if_asset_shaped(self):
+        # ok=False means the browser ITSELF didn't get the asset either —
+        # nothing to prefer over the (also doomed) static refetch.
+        self.assertFalse(crawl_module._should_capture(False, "image"))
+
+    def test_render_mode_merges_captured_bytes_into_the_result(self):
+        # A fake _rendered_fetcher, patched in place of real playwright:
+        # proves crawl_site's render branch threads (fetch, captured)
+        # through into the returned CrawlResult, not just crawl_site's own
+        # page content.
+        html = ('<html><body><img src="http://example.test/logo.png">'
+               "</body></html>")
+
+        @contextlib.contextmanager
+        def fake_rendered_fetcher(timeout):
+            def fetch(url, _timeout):
+                return "text/html", html
+            yield fetch, {"http://example.test/logo.png": b"\x89PNG-from-browser"}
+
+        with mock.patch.object(crawl_module, "_rendered_fetcher", fake_rendered_fetcher):
+            result = crawl_site("http://example.test/", render=True)
+        self.assertEqual(
+            result.captured["http://example.test/logo.png"], b"\x89PNG-from-browser"
+        )
 
 
 class Replicating(unittest.TestCase):

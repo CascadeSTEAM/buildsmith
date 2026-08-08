@@ -51,6 +51,11 @@ class CrawlResult:
     #: url -> local filename, for assets actually downloaded.
     downloaded: dict[str, str] = field(default_factory=dict)
     truncated: bool = False
+    #: url -> bytes, for assets a --render crawl already saw the browser
+    #: fetch successfully (#12). Signed/protected CDN assets can 403 on a
+    #: cold static refetch even though the browser just loaded them —
+    #: fetch_assets prefers these over hitting the network a second time.
+    captured: dict[str, bytes] = field(default_factory=dict)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -229,6 +234,15 @@ def fetch_assets(
         if target.exists():
             result.downloaded[url] = name
             continue
+        captured = result.captured.get(url)
+        if captured is not None:
+            # The browser already fetched this during a --render crawl —
+            # use those bytes rather than hitting the network cold a second
+            # time. A signed/protected CDN asset can 403 on that refetch
+            # even though the browser had just loaded it moments earlier.
+            target.write_bytes(captured)
+            result.downloaded[url] = name
+            continue
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
@@ -255,10 +269,15 @@ def crawl_site(
     only honest way to crawl a site that assembles itself client-side.
     """
     if render and opener is None:
-        with _rendered_fetcher(timeout) as fetch:
-            return _crawl(base_url, fetch, max_pages=max_pages,
-                          ignore_robots=ignore_robots, timeout=timeout,
-                          render=True)
+        with _rendered_fetcher(timeout) as (fetch, captured):
+            result = _crawl(base_url, fetch, max_pages=max_pages,
+                            ignore_robots=ignore_robots, timeout=timeout,
+                            render=True)
+            # Merge while the browser is still open (the `with` hasn't torn
+            # it down yet) — `captured` is the same dict the response
+            # listener has been filling in throughout the crawl.
+            result.captured.update(captured)
+            return result
     return _crawl(base_url, opener or _fetch, max_pages=max_pages,
                   ignore_robots=ignore_robots, timeout=timeout, render=render)
 
@@ -372,13 +391,30 @@ def _looks_like_shell(html: str) -> bool:
     )
 
 
+#: Response types worth capturing bytes for. Fonts/stylesheets are cheap
+#: insurance; the reported failure (#12) is CDN-protected images.
+_CAPTURED_RESOURCE_TYPES = frozenset({"image", "media", "font", "stylesheet"})
+
+
+def _should_capture(ok: bool, resource_type: str) -> bool:
+    """A pure predicate, factored out so the filter is testable without a
+    real (or faked) playwright response object."""
+    return ok and resource_type in _CAPTURED_RESOURCE_TYPES
+
+
 @contextlib.contextmanager
 def _rendered_fetcher(timeout: float):
-    """One browser for the whole crawl, yielded as a fetch(url, timeout) callable.
+    """One browser for the whole crawl, yielded as (fetch, captured).
 
-    Missing playwright refuses (exit 2) rather than quietly degrading to the
-    static fetch — a degraded crawl is exactly the husk the shell tripwire
-    exists to catch, one layer too late.
+    `fetch(url, timeout)` is the page-navigation callable `_crawl` already
+    expects. `captured` is a `{url: bytes}` dict a response listener fills
+    in throughout the session — every asset the browser actually loaded
+    while rendering a page, so `fetch_assets` doesn't have to refetch a
+    signed/protected CDN url cold and get a 403 for something the browser
+    had just loaded moments earlier (and doesn't hit the source's CDN a
+    second time either). Missing playwright refuses (exit 2) rather than
+    quietly degrading to the static fetch — a degraded crawl is exactly the
+    husk the shell tripwire exists to catch, one layer too late.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -392,13 +428,25 @@ def _rendered_fetcher(timeout: float):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page(user_agent=USER_AGENT)
+        captured: dict[str, bytes] = {}
+
+        def _on_response(response) -> None:
+            # Best-effort: a response this can't read just falls through to
+            # fetch_assets' own static-refetch fallback, same as today.
+            try:
+                if _should_capture(response.ok, response.request.resource_type):
+                    captured[response.url] = response.body()
+            except Exception:  # noqa: BLE001 - never let a listener crash the crawl
+                pass
+
+        page.on("response", _on_response)
         try:
             def fetch(url: str, _timeout: float) -> tuple[str, str]:
                 page.goto(url, wait_until="networkidle",
                           timeout=int(timeout * 1000))
                 return "text/html", page.content()
 
-            yield fetch
+            yield fetch, captured
         finally:
             browser.close()
 
