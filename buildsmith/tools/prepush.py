@@ -63,10 +63,20 @@ def run_suite() -> int:
     linked worktree it is absolute, and the suite's fixtures once committed
     their poison data onto the very branch being pushed (#23). The suite
     must reach repositories only through paths it built itself.
+
+    `-b`/`--buffer`: several tests exercise a real refusal path on purpose
+    (a missing gitleaks binary, a guard rejection) and print the real
+    message while doing it — correct for what they're testing, but with no
+    capture of their own, that output streamed straight through this
+    subprocess's inherited stdout/stderr into the hook's own terminal,
+    interleaved with the *actual* gate verdicts for the push in progress
+    (#1). Buffering discards a passing test's output and keeps it only for
+    a failure, where it is exactly the detail needed to debug — the exit
+    code this function returns is unaffected either way.
     """
     env = hermetic_env(**{_IN_SUITE: "1"})
     return subprocess.run(
-        [dev_python(), "-m", "unittest", "discover", "-s", "tests", "-q"],
+        [dev_python(), "-m", "unittest", "discover", "-s", "tests", "-q", "-b"],
         cwd=REPO_ROOT,
         env=env,
     ).returncode

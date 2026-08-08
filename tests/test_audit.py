@@ -10,6 +10,7 @@ the regex.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from buildsmith.tools.audit import scan_text
 from buildsmith.tools.gitenv import run_git
@@ -215,6 +216,24 @@ class PrePushTest(unittest.TestCase):
         leaked = [k for k in child_env if k.startswith("GIT_")]
         self.assertEqual(leaked, [], f"GIT_* leaked into the child suite: {leaked}")
         self.assertEqual(child_env.get(prepush._IN_SUITE), "1")
+
+    def test_the_spawned_suite_is_buffered(self) -> None:
+        """#1: several tests exercise a real refusal path on purpose and
+        print the real message doing it — correct for what they test, but
+        with no buffering, that output streamed straight through this
+        subprocess's inherited stdout/stderr into the hook's own terminal,
+        interleaved with the actual gate verdicts for the push in
+        progress. -b discards a passing test's output and keeps it only
+        for a failure."""
+        from buildsmith.tools import prepush
+
+        with mock.patch.object(
+            prepush.subprocess, "run",
+            return_value=mock.Mock(returncode=0),
+        ) as run:
+            prepush.run_suite()
+
+        self.assertIn("-b", run.call_args.args[0])
 
     def test_the_suite_is_not_spawned_from_inside_itself(self) -> None:
         """prepush spawns the suite; the suite contains this test; without a
