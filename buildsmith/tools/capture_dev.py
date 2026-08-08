@@ -227,6 +227,22 @@ def read_state(target: str, *, transport: str = "auto") -> dict:
     return state
 
 
+def _filename_key(value: str, *, field: str) -> str:
+    """Guard a doctype field before it becomes a `dev-state/` filename.
+
+    `page['name']` is normally a Frappe-minted `page-<hash8>` (TRAP-012), but
+    ADR-008 records that a bench import can make it choosable — and
+    `component_id` is chosen by the author outright (TRAP-005). Either could
+    in principle contain a path separator; writing that straight into a path
+    would crash `write_text()` (no intermediate directory exists) or, worse,
+    write outside `dev-state/` silently. Fail loud instead of reproducing the
+    exact class of silent clobber #27 was filed to close.
+    """
+    if not value or "/" in value or "\\" in value or ".." in value:
+        raise SystemExit(f"capture_dev: unsafe {field} for a dev-state filename: {value!r}")
+    return value
+
+
 def capture(site: str, *, target: str = "sandbox.localhost",
             transport: str = "auto", out: Path | None = None) -> dict:
     """`out` overrides the destination — the optimize workflow checkpoints
@@ -246,10 +262,16 @@ def capture(site: str, *, target: str = "sandbox.localhost",
         existing.unlink()
 
     for page in state["pages"]:
-        slug = (page["route"] or "home").replace("/", "_")
-        (out / "pages" / f"{slug}.json").write_text(json.dumps(page, indent=2) + "\n")
+        # Keyed by `name`, the doctype's own unique field (TRAP-012) — not by
+        # route. Two distinct routes can slugify to the same string (`a/b` and
+        # `a_b`, or a literal route `home` colliding with the empty-route
+        # fallback), and a route-derived filename silently overwrote one
+        # page's capture with another's (#27).
+        name = _filename_key(page["name"], field="page name")
+        (out / "pages" / f"{name}.json").write_text(json.dumps(page, indent=2) + "\n")
     for component in state["components"]:
-        (out / "components" / f"{component['component_id']}.json").write_text(
+        component_id = _filename_key(component["component_id"], field="component_id")
+        (out / "components" / f"{component_id}.json").write_text(
             json.dumps(component, indent=2) + "\n"
         )
     (out / "tokens-applied.json").write_text(
