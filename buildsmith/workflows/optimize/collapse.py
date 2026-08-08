@@ -215,7 +215,7 @@ def run(site: str, *, target: str = "sandbox.localhost",
         # Ledger before mutation — library-level so no caller skips it.
         from buildsmith.workflows.optimize import gates
 
-        gates.record_apply(site, "collapse")
+        gates.record_apply(site, "collapse", target=target)
         run_fn = runner or run_bench
         script = f"""
 import frappe, json

@@ -345,7 +345,7 @@ def apply(site: str, *, clone_url: str = "http://127.0.0.1:8000",
     # can mutate the sandbox without the ledger knowing.
     from buildsmith.workflows.optimize import gates
 
-    gates.record_apply(site, "tokenize")
+    gates.record_apply(site, "tokenize", target=target)
 
     mapping = ensure_variables(site, accepted, target=target, runner=run)
 

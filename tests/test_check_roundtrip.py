@@ -62,6 +62,18 @@ class RefusesWhilePendingTest(unittest.TestCase):
         self.assertIn("tokenize", message)
         self.assertIn("oracle", message)
 
+    def test_a_ledger_entry_missing_transform_refuses_cleanly_not_a_crash(self):
+        # a human may hand-edit sites/<site>/opt/gates.json; the refusal
+        # message must still build (as "unknown"), never raise KeyError.
+        pending = {"example": [{}]}
+        with mock.patch(
+            "buildsmith.workflows.optimize.gates.any_pending", return_value=pending
+        ), mock.patch.object(check_roundtrip.subprocess, "run") as run:
+            with self.assertRaises(SystemExit) as caught:
+                check_roundtrip.main([])
+            run.assert_not_called()
+        self.assertIn("unknown", str(caught.exception))
+
     def test_a_clean_ledger_proceeds_to_the_sandbox_check(self):
         with mock.patch(
             "buildsmith.workflows.optimize.gates.any_pending", return_value={}

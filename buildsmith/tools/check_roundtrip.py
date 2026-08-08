@@ -206,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     open_ledgers = gates.any_pending()
     if open_ledgers:
         names = ", ".join(
-            f"{site} ({', '.join(sorted({e['transform'] for e in entries}))})"
+            f"{site} ({gates.transform_names(entries)})"
             for site, entries in sorted(open_ledgers.items())
         )
         raise SystemExit(

@@ -187,6 +187,37 @@ class AnyPendingTest(unittest.TestCase):
         gates.record_apply("dirty", "collapse")
         self.assertEqual(list(gates.any_pending()), ["dirty"])
 
+    def test_an_entry_against_a_different_target_is_not_reported(self):
+        # every optimize apply accepts --target; a pending entry elsewhere
+        # says nothing about whether sandbox.localhost itself is dirty.
+        gates.record_apply("x", "tokenize", target="other.localhost")
+        self.assertEqual(gates.any_pending(), {})
+        self.assertEqual(gates.any_pending(target="other.localhost"),
+                         {"x": gates.pending("x")})
+
+    def test_a_legacy_entry_with_no_target_key_fails_closed(self):
+        # written before `target` existed on the schema — must still count,
+        # the same way a missing `oracle` key counts as unproved.
+        gates.record_apply("x", "tokenize")
+        data = gates._load("x")
+        del data["entries"][0]["target"]
+        gates._save("x", data)
+        self.assertEqual(list(gates.any_pending()), ["x"])
+
+
+class TransformNamesTest(unittest.TestCase):
+    """The one place every pending-entry refusal builds its message."""
+
+    def test_names_are_sorted_and_deduped(self):
+        entries = [{"transform": "fonts"}, {"transform": "collapse"},
+                   {"transform": "fonts"}]
+        self.assertEqual(gates.transform_names(entries), "collapse, fonts")
+
+    def test_an_entry_with_no_transform_key_fails_closed_not_crashes(self):
+        # a human may hand-edit the ledger; a missing key must read as
+        # "unknown", never raise KeyError out of a refusal message.
+        self.assertEqual(gates.transform_names([{}]), "unknown")
+
 
 if __name__ == "__main__":
     unittest.main()
