@@ -97,6 +97,20 @@ def cmd_clone(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_load(args: argparse.Namespace) -> int:
+    """Load an already-emitted `build/` payload into the dev instance.
+
+    The other half of `clone --no-load` (#13): crawling, converting, and
+    emitting `sites/<site>/build/` already happen unconditionally before
+    that flag's gate, so a deferred load needs none of it redone — only
+    `load_dev.load` itself, which this wraps directly.
+    """
+    from buildsmith.tools import load_dev
+
+    load_dev.load(args.site, with_assets=not args.no_assets, target=args.target)
+    return EXIT_OK
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Content diff plus a browser check. Both, because they prove different things."""
     from buildsmith.tools import clone_diff, conformance
@@ -597,6 +611,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="only for a site you control; make it a decision, not a default")
     p.add_argument("--no-load", action="store_true", help="emit payloads without loading")
     p.add_argument("--target", default="sandbox.localhost")
+
+    p = add("load", cmd_load, "load an already-emitted build/ payload into dev")
+    p.add_argument("--site", required=True)
+    p.add_argument("--target", default="sandbox.localhost")
+    p.add_argument("--no-assets", action="store_true")
 
     p = add("verify", cmd_verify, "content diff + browser check of the dev copy")
     p.add_argument("--site", required=True)

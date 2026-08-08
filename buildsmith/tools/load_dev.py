@@ -24,8 +24,8 @@ What it loads, in the order that works:
    (TRAP-015). `clear-website-cache` alone is not enough; the rendered page cache
    is separate.
 
-    buildsmith load dev --site example
-    buildsmith load dev --site example --no-assets
+    buildsmith load --site example
+    buildsmith load --site example --no-assets
 """
 
 from __future__ import annotations
