@@ -30,6 +30,7 @@ record cannot affect it. Counting those would be a false positive.
 Usage:
     buildsmith simulate --state state-export.json --payload component.json
     buildsmith simulate --state state-export.json --payload one.json --payload two.json
+    buildsmith simulate --state sites/<site>/dev-state --payload component.json
 
 Exit status is 1 if any page would collapse, 0 otherwise. Nothing here connects
 to a site; the state export is a file, read back beforehand.
@@ -348,14 +349,24 @@ def simulate(state: dict, payloads: list[dict]) -> Report:
 
 
 def load_state(path: str | Path) -> dict:
-    """Load a state export.
+    """Load a state export — a single file, or a `capture_dev` directory.
 
     Expected shape — everything read back from the site beforehand:
 
         {"components": {"<component_id>": {"block": {...}}},
          "pages": [{"name": ..., "route": ..., "blocks": [...], "draft_blocks": [...]}]}
+
+    `capture_dev` writes this data split across a directory instead —
+    `dev-state/pages/*.json` per page, `dev-state/components/*.json` per
+    component — because the optimize pipeline checkpoints it immutably.
+    Neither shape satisfies the other, so a directory is reassembled here
+    rather than making every caller (and every user following the golive
+    checklist) do it by hand.
     """
-    state = json.loads(Path(path).read_text())
+    path = Path(path)
+    if path.is_dir():
+        return _load_state_dir(path)
+    state = json.loads(path.read_text())
     if "pages" not in state:
         raise ValueError(
             f"{path}: a state export needs a 'pages' list. Without the pages there is "
@@ -364,9 +375,41 @@ def load_state(path: str | Path) -> dict:
     return state
 
 
+def _load_state_dir(directory: Path) -> dict:
+    """Reassemble a `capture_dev` `dev-state/` directory into simulate's shape.
+
+    `manifest.json` alone is useless here — it holds counts and a content
+    hash, never the page/component content simulate needs — so this reads
+    the per-record files instead. Components arrive as one file each (a
+    list on disk); simulate needs a dict keyed by `component_id`.
+    """
+    pages_dir = directory / "pages"
+    if not pages_dir.is_dir():
+        raise ValueError(
+            f"{directory}: no pages/ subdirectory. capture_dev writes "
+            "dev-state/pages/*.json — a directory without one is not a capture."
+        )
+    pages = [json.loads(p.read_text()) for p in sorted(pages_dir.glob("*.json"))]
+
+    components: dict[str, dict] = {}
+    components_dir = directory / "components"
+    if components_dir.is_dir():
+        for p in sorted(components_dir.glob("*.json")):
+            component = json.loads(p.read_text())
+            component_id = component.get("component_id")
+            if component_id:
+                components[component_id] = component
+
+    return {"pages": pages, "components": components}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--state", required=True, help="state export read back from the site")
+    parser.add_argument(
+        "--state", required=True,
+        help="state export read back from the site — a single state-export.json, "
+             "or a capture_dev dev-state/ directory",
+    )
     parser.add_argument(
         "--payload", required=True, action="append", help="component payload (repeatable)"
     )

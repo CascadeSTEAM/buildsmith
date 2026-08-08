@@ -186,5 +186,72 @@ class StateLoading(unittest.TestCase):
         self.assertEqual(len(pages_using([p], "site-header")), 1)
 
 
+class LoadingACaptureDevDirectory(unittest.TestCase):
+    """#4: capture_dev writes dev-state/ as a directory, not a single file
+    — simulate must be able to consume its own repo's capture output."""
+
+    def _write_dev_state(self, root: Path, pages: list[dict],
+                          components: list[dict] | None = None) -> Path:
+        out = root / "dev-state"
+        (out / "pages").mkdir(parents=True)
+        (out / "components").mkdir(parents=True)
+        for p in pages:
+            slug = (p["route"] or "home").replace("/", "_")
+            (out / "pages" / f"{slug}.json").write_text(json.dumps(p))
+        for c in components or []:
+            (out / "components" / f"{c['component_id']}.json").write_text(json.dumps(c))
+        # manifest.json exists alongside, the way capture_dev actually writes
+        # it, holding none of the content simulate needs — proving the fix
+        # reads the per-record files rather than trying the manifest first.
+        (out / "manifest.json").write_text(json.dumps({"counts": {"pages": len(pages)}}))
+        return out
+
+    def test_pages_are_reassembled_from_the_pages_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._write_dev_state(Path(d), [page("home"), page("about")])
+            loaded = load_state(out)
+        self.assertEqual(
+            sorted(p["name"] for p in loaded["pages"]), ["about", "home"])
+
+    def test_components_are_reassembled_as_a_dict_keyed_by_component_id(self):
+        component_record = {"component_id": "site-header", "block": component()}
+        with tempfile.TemporaryDirectory() as d:
+            out = self._write_dev_state(Path(d), [page("home")], [component_record])
+            loaded = load_state(out)
+        self.assertEqual(list(loaded["components"]), ["site-header"])
+        self.assertEqual(loaded["components"]["site-header"]["block"], component())
+
+    def test_an_empty_pages_directory_is_still_vacuous_not_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._write_dev_state(Path(d), [])
+            loaded = load_state(out)
+        report = simulate(loaded, [])
+        self.assertTrue(report.vacuous)
+
+    def test_a_directory_with_no_pages_subdirectory_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "not-a-capture"
+            root.mkdir()
+            (root / "manifest.json").write_text("{}")
+            with self.assertRaises(ValueError) as caught:
+                load_state(root)
+        self.assertIn("pages/", str(caught.exception))
+
+    def test_a_reassembled_capture_simulates_the_same_as_a_flat_export(self):
+        # The real point: a directory and an equivalent flat file must
+        # produce an identical simulation, not just "load without crashing".
+        pages = [page(f"page-{i}") for i in range(3)]
+        component_record = {"component_id": "site-header", "block": component()}
+        with tempfile.TemporaryDirectory() as d:
+            out = self._write_dev_state(Path(d), pages, [component_record])
+            from_dir = load_state(out)
+        from_file = state(pages)
+        payload = {"component_id": "site-header", "block": component(child_id="renamed")}
+        self.assertEqual(
+            simulate(from_dir, [payload]).to_dict(),
+            simulate(from_file, [payload]).to_dict(),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
