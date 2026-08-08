@@ -11,9 +11,10 @@ from __future__ import annotations
 import argparse
 import os
 import stat
-import subprocess
 import sys
 from pathlib import Path
+
+from buildsmith.tools.gitenv import run_git
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / ".githooks"
@@ -22,8 +23,7 @@ __all__ = ["install", "is_configured", "main"]
 
 
 def _git(*args: str) -> str:
-    return subprocess.run(["git", "-C", str(ROOT), *args],
-                          capture_output=True, text=True).stdout.strip()
+    return run_git("-C", str(ROOT), *args).stdout.strip()
 
 
 def is_configured() -> tuple[bool, str]:

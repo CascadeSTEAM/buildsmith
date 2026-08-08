@@ -32,6 +32,7 @@ import sys
 from pathlib import Path
 
 from buildsmith.errors import EXIT_OK, EXIT_PROBLEM
+from buildsmith.tools.gitenv import hermetic_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -55,11 +56,19 @@ def dev_python() -> str:
 
 
 def run_suite() -> int:
-    """Run the unit suite in a child interpreter and return its exit code."""
+    """Run the unit suite in a child interpreter and return its exit code.
+
+    No `GIT_*` variable survives into the child (see gitenv). GIT_DIR
+    overrides the `git -C <tempdir>` every test fixture relies on; from a
+    linked worktree it is absolute, and the suite's fixtures once committed
+    their poison data onto the very branch being pushed (#23). The suite
+    must reach repositories only through paths it built itself.
+    """
+    env = hermetic_env(**{_IN_SUITE: "1"})
     return subprocess.run(
         [dev_python(), "-m", "unittest", "discover", "-s", "tests", "-q"],
         cwd=REPO_ROOT,
-        env={**os.environ, _IN_SUITE: "1"},
+        env=env,
     ).returncode
 
 

@@ -37,9 +37,10 @@ import argparse
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from buildsmith.tools.gitenv import run_git
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -265,9 +266,7 @@ def scan_text(text: str, where: str, tokens: list[str]) -> list[Finding]:
 
 
 def _git(*args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(ROOT), *args], capture_output=True, text=True
-    ).stdout
+    return run_git("-C", str(ROOT), *args).stdout
 
 
 def audit(scope: str = "all") -> Report:

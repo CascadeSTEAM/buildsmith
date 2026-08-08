@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from buildsmith.tools.gitenv import hermetic_env, run_git
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Assembled from octets rather than written literally: a real RFC1918 address in
@@ -88,12 +90,11 @@ class PublicationGuardTest(unittest.TestCase):
 
     @classmethod
     def _git(cls, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", "-C", str(cls.repo), *args], capture_output=True, text=True, check=False
-        )
+        return run_git("-C", str(cls.repo), *args)
 
     def _guard(self, *args: str, **overrides: str) -> subprocess.CompletedProcess:
-        env = dict(os.environ)
+        # The guard spawns git of its own; it must inherit no GIT_* either.
+        env = hermetic_env()
         env["OPSKIT_ROOT"] = str(self.fake_opskit)
         # The fixture repo is a partial copy: the guard machinery and nothing
         # else. It has no design inputs and no pin, so the hook's generated-doc
@@ -224,6 +225,27 @@ class PublicationGuardTest(unittest.TestCase):
             self._git("branch", "-q", "-m", "main")
             self._git("reset", "-q")
             (self.repo / "harmless.md").unlink(missing_ok=True)
+
+    def test_the_fixture_repo_is_the_only_repo_in_reach(self) -> None:
+        """Under a pre-push hook the environment carries GIT_DIR, which
+        overrides `git -C` — from a linked worktree it is absolute, and this
+        class's own fixtures once landed on the developer's real repository
+        (#23). With a poisoned ambient GIT_DIR, the helper must still answer
+        from the throwaway repo."""
+        old = os.environ.get("GIT_DIR")
+        os.environ["GIT_DIR"] = "/nonexistent/elsewhere/.git"
+        try:
+            proc = self._git("rev-parse", "--absolute-git-dir")
+        finally:
+            if old is None:
+                os.environ.pop("GIT_DIR", None)
+            else:
+                os.environ["GIT_DIR"] = old
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            Path(proc.stdout.strip()), (self.repo / ".git").resolve(),
+            "git answered for a repository other than the fixture",
+        )
 
     # --- control ------------------------------------------------------------
 

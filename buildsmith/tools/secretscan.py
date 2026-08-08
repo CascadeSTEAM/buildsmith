@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 from buildsmith.errors import EXIT_OK, EXIT_PROBLEM, EXIT_UNCHECKED
+from buildsmith.tools.gitenv import hermetic_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -53,23 +54,33 @@ def gitleaks_path() -> str | None:
     return shutil.which("gitleaks")
 
 
-def run_gitleaks(scan_args: list[str]) -> int:
+def run_gitleaks(scan_args: list[str], *, hermetic: bool = True) -> int:
     """Run gitleaks in the repo root and map its exit into our contract.
 
     gitleaks exits 0 clean and 1 on findings, which happens to match this
     repo's 0/1. Anything else (bad config, not a git repo) is a scan that
     never completed — exit 2, not 1, so nobody hunts for a leak that was
     never actually detected.
+
+    hermetic=True (the default, for scan_history): gitleaks reads the
+    repository through git, and an inherited GIT_DIR would out-rank cwd (see
+    gitenv) — REPO_ROOT should decide. scan_staged passes hermetic=False:
+    under pre-commit, git hands gitleaks' internal `git diff --staged` a
+    temporary GIT_INDEX_FILE for a partial commit, and scrubbing it would
+    make gitleaks scan the wrong staged set — the same reasoning guard.py's
+    _git documents for its own pre-commit path.
     """
     binary = gitleaks_path()
     if binary is None:
         print(INSTALL_HINT, file=sys.stderr)
         return EXIT_UNCHECKED
 
+    env = hermetic_env() if hermetic else dict(os.environ)
     proc = subprocess.run(
         [binary, *scan_args, "--redact", "--config", ".gitleaks.toml"],
         cwd=REPO_ROOT,
         check=False,
+        env=env,
     )
     if proc.returncode == 0:
         return EXIT_OK
@@ -90,7 +101,7 @@ def run_gitleaks(scan_args: list[str]) -> int:
 
 def scan_staged() -> int:
     """The staged diff, on its way into a commit."""
-    return run_gitleaks(["git", "--pre-commit", "--staged"])
+    return run_gitleaks(["git", "--pre-commit", "--staged"], hermetic=False)
 
 
 def scan_history() -> int:

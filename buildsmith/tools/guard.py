@@ -52,6 +52,7 @@ import sys
 from pathlib import Path
 
 from buildsmith.errors import EXIT_OK, EXIT_PROBLEM
+from buildsmith.tools.gitenv import run_git
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -69,10 +70,13 @@ def _git(*args: str) -> str:
 
     Failure is not distinguished from empty output on purpose: every caller here
     is asking "which paths changed", and both answers mean "no paths to check".
+
+    hermetic=False deliberately (see gitenv): this runs under pre-commit,
+    where GIT_INDEX_FILE is load-bearing — a partial commit stages through a
+    temporary index, and scrubbing the variable would make the guard check
+    the wrong staged set. Same for the delegated OpsKit guard below.
     """
-    proc = subprocess.run(
-        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=False
-    )
+    proc = run_git(*args, cwd=REPO_ROOT, hermetic=False)
     return proc.stdout if proc.returncode == 0 else ""
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import unittest
 
 from buildsmith.tools.audit import scan_text
+from buildsmith.tools.gitenv import run_git
 from tests.fixtures import (
     CLIENT_DOMAIN as CLIENT,
 )
@@ -177,6 +178,44 @@ class PrePushTest(unittest.TestCase):
         _, out = self._run(0, suite_code=1)
         self.assertIn("BUILDSMITH_SKIP_AUDIT=1", out)
 
+    def test_the_spawned_suite_cannot_see_the_pushers_repository(self) -> None:
+        """git hands the pre-push hook its repository location (GIT_DIR and
+        family), and GIT_DIR overrides the `git -C <tempdir>` every fixture
+        relies on. From a linked worktree that path is absolute, and the
+        suite once committed its poison fixtures onto the very branch being
+        pushed (#23). No GIT_* may reach the child suite."""
+        import os
+        import subprocess
+
+        from buildsmith.tools import prepush
+
+        captured: dict = {}
+        old_run = subprocess.run
+        old_env = {k: os.environ.get(k) for k in ("GIT_DIR", "GIT_INDEX_FILE")}
+        os.environ["GIT_DIR"] = "/nonexistent/pusher/.git/worktrees/x"
+        os.environ["GIT_INDEX_FILE"] = "/nonexistent/pusher/index"
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return type("P", (), {"returncode": 0})()
+
+        subprocess.run = fake_run  # type: ignore[assignment]
+        try:
+            prepush.run_suite()
+        finally:
+            subprocess.run = old_run  # type: ignore[assignment]
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        child_env = captured["env"]
+        self.assertIsNotNone(child_env, "the suite must run with an explicit env")
+        leaked = [k for k in child_env if k.startswith("GIT_")]
+        self.assertEqual(leaked, [], f"GIT_* leaked into the child suite: {leaked}")
+        self.assertEqual(child_env.get(prepush._IN_SUITE), "1")
+
     def test_the_suite_is_not_spawned_from_inside_itself(self) -> None:
         """prepush spawns the suite; the suite contains this test; without a
         recursion guard an unstubbed call would fork forever. The marker must
@@ -226,7 +265,6 @@ class HistoryBlobTest(unittest.TestCase):
     """
 
     def test_a_token_only_in_history_is_found(self) -> None:
-        import subprocess
         import tempfile
         from pathlib import Path
 
@@ -235,9 +273,7 @@ class HistoryBlobTest(unittest.TestCase):
         token = "acme" + "corp"
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            run = lambda *a: subprocess.run(  # noqa: E731
-                ["git", "-C", str(repo), *a], capture_output=True, text=True, check=False
-            )
+            run = lambda *a: run_git("-C", str(repo), *a)  # noqa: E731
             run("init", "-q", "-b", "main")
             run("config", "user.name", "t")
             run("config", "user.email", "t@example.invalid")
