@@ -69,6 +69,11 @@ def _git(*args: str) -> str:
 
     Failure is not distinguished from empty output on purpose: every caller here
     is asking "which paths changed", and both answers mean "no paths to check".
+
+    Deliberately NOT hermetic_env (see gitenv): this runs under pre-commit,
+    where GIT_INDEX_FILE is load-bearing — a partial commit stages through a
+    temporary index, and scrubbing the variable would make the guard check
+    the wrong staged set. Same for the delegated OpsKit guard below.
     """
     proc = subprocess.run(
         ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=False

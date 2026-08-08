@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 from buildsmith.errors import EXIT_OK, EXIT_PROBLEM, EXIT_UNCHECKED
+from buildsmith.tools.gitenv import hermetic_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -66,10 +67,13 @@ def run_gitleaks(scan_args: list[str]) -> int:
         print(INSTALL_HINT, file=sys.stderr)
         return EXIT_UNCHECKED
 
+    # hermetic_env: gitleaks reads the repository through git, and an
+    # inherited GIT_DIR would out-rank cwd (see gitenv). REPO_ROOT decides.
     proc = subprocess.run(
         [binary, *scan_args, "--redact", "--config", ".gitleaks.toml"],
         cwd=REPO_ROOT,
         check=False,
+        env=hermetic_env(),
     )
     if proc.returncode == 0:
         return EXIT_OK

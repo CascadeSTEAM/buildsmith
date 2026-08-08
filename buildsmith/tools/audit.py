@@ -41,6 +41,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from buildsmith.tools.gitenv import hermetic_env
+
 ROOT = Path(__file__).resolve().parents[2]
 
 __all__ = ["Finding", "audit", "collect_tokens", "scan_text"]
@@ -265,8 +267,11 @@ def scan_text(text: str, where: str, tokens: list[str]) -> list[Finding]:
 
 
 def _git(*args: str) -> str:
+    # hermetic_env: under a hook, an inherited GIT_DIR would out-rank -C and
+    # silently audit a different repository than ROOT names (see gitenv).
     return subprocess.run(
-        ["git", "-C", str(ROOT), *args], capture_output=True, text=True
+        ["git", "-C", str(ROOT), *args],
+        capture_output=True, text=True, env=hermetic_env(),
     ).stdout
 
 
