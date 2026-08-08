@@ -114,6 +114,31 @@ def _same_origin(url: str, base: str) -> bool:
     return (a.scheme, a.netloc) == (b.scheme, b.netloc)
 
 
+def _link_tags(html: str) -> list[tuple[str, str]]:
+    """Every `<link>` tag's `(rel, href)` pair, attribute-order independent.
+
+    Matched tag-first, then `rel`/`href` searched for independently within
+    it, so `href` before `rel` — legal HTML, and real markup — isn't
+    silently missed the way a single ordered regex would miss it (#16's
+    review: the icon-discovery regex this replaces required `rel` first,
+    so a same-tag reference build.py assembled from a more tolerant parser
+    could point at a file this function never fetched).
+
+    The one place that decides what a `<link>` tag *is*, for both crawling
+    (this module) and referencing it back (`build.py`'s `_favicon_for`/
+    `_icon_links_for`) — so the two can't silently disagree about which
+    links exist.
+    """
+    pairs = []
+    for tag_match in re.finditer(r"<link\b[^>]*>", html, re.I):
+        tag = tag_match.group(0)
+        rel = re.search(r"""\brel\s*=\s*["']([^"']*)""", tag, re.I)
+        href = re.search(r"""\bhref\s*=\s*["']([^"']+)""", tag, re.I)
+        if rel and href:
+            pairs.append((rel.group(1).strip(), href.group(1)))
+    return pairs
+
+
 def _links(html: str, base: str) -> tuple[set[str], set[str]]:
     """Return (page links, asset references). Deliberately crude and tolerant.
 
@@ -144,25 +169,18 @@ def _links(html: str, base: str) -> tuple[set[str], set[str]]:
             if url:
                 assets.add(urllib.parse.urljoin(base, url))
 
-    # 3. icons — the favicon lives in <link>, which is not rendered content
+    # 3. icons — the favicon (and the rest of the icon rel family: touch
+    #    icons, mask icons) lives in <link>, which is not rendered content
     #    but is unmistakably part of what the site looks like.
-    for match in re.finditer(
-        r"""<link\b[^>]*\brel\s*=\s*["'][^"']*icon[^"']*["'][^>]*\bhref\s*=\s*["']([^"']+)""",
-        html, re.I,
-    ):
-        assets.add(urllib.parse.urljoin(base, match.group(1)))
-
     # 4. stylesheets — on most real sites the appearance lives in linked CSS,
     #    and style recovery reads it (htmlblocks css_loader). A stylesheet
-    #    never fetched is a page converted with no appearance at all. Matched
-    #    tag-first so attribute order cannot hide one (rel before href and
-    #    href before rel are both legal).
-    for tag_match in re.finditer(r"<link\b[^>]*>", html, re.I):
-        tag = tag_match.group(0)
-        rel = re.search(r"""\brel\s*=\s*["']([^"']*)""", tag, re.I)
-        href = re.search(r"""\bhref\s*=\s*["']([^"']+)""", tag, re.I)
-        if rel and href and "stylesheet" in rel.group(1).lower().split():
-            assets.add(urllib.parse.urljoin(base, href.group(1)))
+    #    never fetched is a page converted with no appearance at all.
+    for rel, href in _link_tags(html):
+        rel_tokens = rel.lower().split()
+        if href.startswith("data:"):
+            continue  # inline; nothing to fetch, nothing to save under a name
+        if "icon" in rel.lower() or "stylesheet" in rel_tokens:
+            assets.add(urllib.parse.urljoin(base, href))
 
     # 5. url(...) anywhere in CSS — <style> blocks and inline style attributes.
     #    This is where background images live, and they are frequently the
