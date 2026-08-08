@@ -660,6 +660,82 @@ class IconFamilyIsLiftedIntoHeadHtml(unittest.TestCase):
             head = result.pages[0].head_html
         self.assertNotIn("apple-touch-icon", head)
 
+    def test_the_real_favicon_survives_even_when_a_touch_icon_comes_first(self):
+        # Review on #16's own PR: _favicon_for used to match ANY rel merely
+        # containing "icon" — so a touch icon listed before the real
+        # favicon got grabbed as page.favicon, and _icon_links_for skipped
+        # rel="icon" from head_html believing it was already covered. Net
+        # result: the true favicon.ico referenced nowhere at all.
+        html = (
+            "<html><head>"
+            '<link rel="apple-touch-icon" href="/icon_180x180.png">'
+            '<link rel="icon" href="/favicon.ico">'
+            "</head><body><div class='a'>x</div></body></html>"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(html)
+            assets = Path(tmp) / "assets"
+            result = replicate(root, site="example", assets_dir=assets)
+        self.assertEqual(result.pages[0].favicon, "/favicon.ico")
+        self.assertIn("/files/icon_180x180.png", result.pages[0].head_html)
+
+    def test_two_rels_sharing_one_file_both_survive(self):
+        # apple-touch-icon and its -precomposed variant pointing at the
+        # same PNG is common (older iOS Safari wants the precomposed rel
+        # specifically) — deduping by href alone silently dropped one.
+        html = (
+            "<html><head>"
+            '<link rel="apple-touch-icon" href="/icon.png">'
+            '<link rel="apple-touch-icon-precomposed" href="/icon.png">'
+            "</head><body><div class='a'>x</div></body></html>"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(html)
+            assets = Path(tmp) / "assets"
+            result = replicate(root, site="example", assets_dir=assets)
+            head = result.pages[0].head_html
+        self.assertIn('rel="apple-touch-icon"', head)
+        self.assertIn('rel="apple-touch-icon-precomposed"', head)
+
+    def test_an_icon_link_with_href_before_rel_is_still_fetched_and_referenced(self):
+        # Legal HTML, and real markup from some site generators. The old
+        # icon-discovery regex in crawl.py required rel before href, so a
+        # more tolerant reference-builder could point at a file the crawl
+        # never actually downloaded.
+        html = (
+            "<html><head>"
+            '<link href="/apple-touch-icon.png" rel="apple-touch-icon">'
+            "</head><body><div class='a'>x</div></body></html>"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(html)
+            assets = Path(tmp) / "assets"
+            result = replicate(root, site="example", assets_dir=assets)
+            head = result.pages[0].head_html
+        self.assertIn("/files/apple-touch-icon.png", head)
+
+    def test_a_data_uri_icon_is_not_mangled_into_a_bogus_files_path(self):
+        html = (
+            "<html><head>"
+            '<link rel="mask-icon" href="data:image/svg+xml;base64,AAAA" color="#000">'
+            "</head><body><div class='a'>x</div></body></html>"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crawl"
+            root.mkdir()
+            (root / "index.html").write_text(html)
+            assets = Path(tmp) / "assets"
+            result = replicate(root, site="example", assets_dir=assets)
+            head = result.pages[0].head_html
+        self.assertNotIn("data:", head)
+        self.assertNotIn("mask-icon", head)
+
 
 class NestedRoutesSurviveSaving(unittest.TestCase):
     """#7 — the first nested route ever crawled crashed the clone: the write

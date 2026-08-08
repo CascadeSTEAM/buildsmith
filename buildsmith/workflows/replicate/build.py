@@ -30,7 +30,7 @@ from buildsmith.primitives.template import (
     page_template,
     prerequisites,
 )
-from buildsmith.workflows.replicate.crawl import CrawlResult, crawl_local
+from buildsmith.workflows.replicate.crawl import CrawlResult, _link_tags, crawl_local
 from buildsmith.workflows.replicate.htmlblocks import ConversionError, html_to_blocks
 
 __all__ = ["ReplicateResult", "replicate"]
@@ -262,24 +262,28 @@ def _icon_links_for(html: str) -> list[tuple[str, str]]:
     check reported the resulting misses directly ("asset missing from the
     rendered page: icon_180x180_ios…"): the file was fetched by the crawl,
     it just had nothing in the converted page pointing at it.
-    """
-    import re
 
+    Uses `_link_tags` (`crawl.py`) — the same parse `_links()` uses to
+    decide what gets fetched — so a link this lifts into `head_html` was
+    guaranteed to be one `fetch_assets` actually downloaded (review on
+    #16's own PR: an independent, order-dependent regex here once could
+    reference a file the crawl's order-independent one never fetched).
+
+    Deduped by `(rel, href)`, not `href` alone: two different rels
+    legitimately sharing one file — apple-touch-icon and its -precomposed
+    variant pointing at the same PNG is common — must both survive; only
+    a *repeated* rel+href pair is a true duplicate.
+    """
     links: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for tag in re.finditer(r"<link\b[^>]*>", html, re.I):
-        markup = tag.group(0)
-        rel_match = re.search(r"""\brel\s*=\s*["']([^"']*)""", markup, re.I)
-        href_match = re.search(r"""\bhref\s*=\s*["']([^"']+)""", markup, re.I)
-        if not rel_match or not href_match:
-            continue
-        rel = rel_match.group(1).strip()
+    seen: set[tuple[str, str]] = set()
+    for rel, href in _link_tags(html):
         if "icon" not in rel.lower() or rel.lower() in _PRIMARY_ICON_RELS:
             continue
-        href = href_match.group(1)
-        if href in seen:
+        if href.startswith("data:"):
+            continue  # inline; there is no /files/<name> for this to become
+        if (rel, href) in seen:
             continue
-        seen.add(href)
+        seen.add((rel, href))
         links.append((rel, href))
     return links
 
@@ -354,17 +358,24 @@ def _head_html_for(converted, *, site: str, route: str, html: str,
 def _favicon_for(html: str) -> str | None:
     """The favicon the source page declares.
 
-    It lives in `<link rel="icon">`, which the converter skips as non-content —
-    correctly, since it is not a block. But it is unmistakably part of what the
-    site looks like, so it is lifted out here and set on the page record.
-    Without it the clone wears Frappe's logo in the browser tab.
-    """
-    import re
+    It lives in `<link rel="icon">` (or `"shortcut icon"`), which the
+    converter skips as non-content — correctly, since it is not a block.
+    But it is unmistakably part of what the site looks like, so it is
+    lifted out here and set on the page record. Without it the clone
+    wears Frappe's logo in the browser tab.
 
-    match = re.search(
-        r"""<link[^>]*rel=["'][^"']*icon[^"']*["'][^>]*href=["']([^"']+)""", html, re.I
-    )
-    return match.group(1) if match else None
+    Scoped to exactly the primary rels (`_PRIMARY_ICON_RELS`), not "any
+    rel containing the substring icon": that substring match used to grab
+    whichever icon-family link — including an apple-touch-icon — happened
+    to appear first in the document, which both set the wrong favicon AND
+    made `_icon_links_for` skip the *real* one from `head_html` (believing
+    it was already covered). The result was the true favicon referenced
+    nowhere at all (review on #16's own PR).
+    """
+    for rel, href in _link_tags(html):
+        if rel.lower() in _PRIMARY_ICON_RELS:
+            return href
+    return None
 
 
 def _title_for(route: str, title: str) -> str:
