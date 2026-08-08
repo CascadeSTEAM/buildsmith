@@ -10,6 +10,7 @@ the regex.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from buildsmith.tools.audit import scan_text
 from buildsmith.tools.gitenv import run_git
@@ -224,24 +225,15 @@ class PrePushTest(unittest.TestCase):
         interleaved with the actual gate verdicts for the push in
         progress. -b discards a passing test's output and keeps it only
         for a failure."""
-        import subprocess
-
         from buildsmith.tools import prepush
 
-        captured: dict = {}
-        old_run = subprocess.run
-
-        def fake_run(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return type("P", (), {"returncode": 0})()
-
-        subprocess.run = fake_run  # type: ignore[assignment]
-        try:
+        with mock.patch.object(
+            prepush.subprocess, "run",
+            return_value=mock.Mock(returncode=0),
+        ) as run:
             prepush.run_suite()
-        finally:
-            subprocess.run = old_run  # type: ignore[assignment]
 
-        self.assertIn("-b", captured["cmd"])
+        self.assertIn("-b", run.call_args.args[0])
 
     def test_the_suite_is_not_spawned_from_inside_itself(self) -> None:
         """prepush spawns the suite; the suite contains this test; without a
