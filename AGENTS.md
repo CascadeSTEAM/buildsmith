@@ -171,6 +171,7 @@ absent.
 | `buildsmith journal` | append to / render the run journal |
 | `buildsmith golive --site <s>` | generate the go-live plan from the actual build |
 | `buildsmith clone --site <s> --source <url>` | crawl, convert, extract `features.json`, and load into the dev instance (`--no-load` to skip) |
+| `buildsmith load --site <s>` | load an already-emitted `build/` payload into the dev instance — the deferred counterpart to `clone --no-load` |
 | `buildsmith adopt --site <s>` | load a live export into the sandbox exactly (ADR-008 Maintain) |
 | `buildsmith verify --site <s> [--source <url>]` | content diff (set differences, not counts) plus a browser check against `features.json` |
 | `buildsmith optimize status --site <s> [--json]` | W3: where am I in the pipeline — baseline, gate ledger, proposals (artifacts only) |
