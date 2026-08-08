@@ -68,6 +68,54 @@ class SimulateVacuousIsExit2(unittest.TestCase):
         self.assertNotIn("collapse nodes", err.getvalue())
 
 
+class SimulateMalformedInputIsExit2(unittest.TestCase):
+    """#3: a malformed payload or an incomplete export is "could not check",
+    never a raw traceback — the same contract as the vacuous-export case."""
+
+    def _state(self, tmp: Path) -> Path:
+        state = Path(tmp) / "state.json"
+        state.write_text(json.dumps({"pages": [], "components": {}}))
+        return state
+
+    def test_a_payload_with_no_component_id_is_exit_2_not_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._state(tmp)
+            payload = Path(tmp) / "payload.json"
+            payload.write_text(json.dumps({"block": {"element": "div"}}))
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = cli.main(["simulate", "--state", str(state),
+                                 "--payload", str(payload)])
+        self.assertEqual(code, 2)
+        self.assertIn("COULD NOT CHECK", err.getvalue())
+
+    def test_an_incomplete_export_is_exit_2_not_a_traceback(self):
+        # A page already uses the component, but the export omits it —
+        # comparing against nothing would pass vacuously (simulate.py).
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state.json"
+            state.write_text(json.dumps({
+                "components": {},
+                "pages": [{"name": "home", "route": "/", "blocks": [
+                    {"blockId": "shell", "referenceBlockId": "root",
+                     "extendedFromComponent": "site-header", "element": None,
+                     "children": []},
+                ]}],
+            }))
+            payload = Path(tmp) / "payload.json"
+            payload.write_text(json.dumps({
+                "component_id": "site-header",
+                "block": {"element": "header", "blockId": "root"},
+            }))
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = cli.main(["simulate", "--state", str(state),
+                                 "--payload", str(payload)])
+        self.assertEqual(code, 2)
+        self.assertIn("COULD NOT CHECK", err.getvalue())
+        self.assertIn("incomplete", err.getvalue())
+
+
 class AuditKindFilterNeverChangesTheVerdict(unittest.TestCase):
     """--kind narrows what is shown; the exit code follows the full report."""
 
