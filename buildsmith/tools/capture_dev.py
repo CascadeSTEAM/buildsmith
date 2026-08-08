@@ -53,6 +53,7 @@ for name in frappe.get_all("Builder Page", pluck="name"):
         "head_html": d.head_html or "", "body_html": d.body_html or "",
         "meta_description": d.meta_description,
         "blocks": frappe.parse_json(d.blocks or "[]"),
+        "draft_blocks": frappe.parse_json(d.draft_blocks or "[]"),
     })
 
 for name in frappe.get_all("Builder Component", pluck="name"):
@@ -90,7 +91,11 @@ def _content_hash(state: dict) -> str:
     material = {
         "pages": sorted(
             (p["route"], p["page_title"], json.dumps(p["blocks"], sort_keys=True),
-             p.get("head_html", ""))
+             p.get("head_html", ""),
+             # An unpublished draft is still damage waiting to be published
+             # (simulate.pages_using checks it explicitly) — a drift check
+             # that can't see a draft edit isn't checking what matters.
+             json.dumps(p.get("draft_blocks") or [], sort_keys=True))
             for p in state["pages"]
         ),
         "components": sorted(
@@ -113,7 +118,7 @@ def _content_hash(state: dict) -> str:
 PAGE_FIELDS = (
     "name", "page_title", "route", "published", "is_template", "template_group",
     "dynamic_route", "project_folder", "favicon", "head_html", "body_html",
-    "meta_description", "blocks",
+    "meta_description", "blocks", "draft_blocks",
 )
 _PAGE_INTS = ("published", "is_template", "dynamic_route")
 _PAGE_STRS = ("head_html", "body_html")
@@ -162,6 +167,9 @@ def _read_state_rest(target: str) -> dict:
         for key in _PAGE_STRS:
             page[key] = page.get(key) or ""
         page["blocks"] = json.loads(row.get("blocks") or "[]")
+        # An unpublished draft is still damage waiting to be published
+        # (simulate.pages_using checks it explicitly) — capture it too.
+        page["draft_blocks"] = json.loads(row.get("draft_blocks") or "[]")
         out["pages"].append(page)
 
     for row in client.get_list(

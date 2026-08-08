@@ -97,9 +97,13 @@ for f in sorted((state / "components").glob("*.json")):
 routes = []
 for f in sorted((state / "pages").glob("*.json")):
     rec = json.loads(f.read_text())
-    payload = {k: v for k, v in rec.items() if k not in ("name", "blocks")}
+    payload = {k: v for k, v in rec.items() if k not in ("name", "blocks", "draft_blocks")}
     payload["doctype"] = "Builder Page"
     payload["blocks"] = json.dumps(rec["blocks"])
+    # Long Text like blocks — capture_dev parses it to a Python list, and
+    # Frappe stores the column as a JSON string; forwarding the list as-is
+    # would insert the wrong type on every page, draft or not.
+    payload["draft_blocks"] = json.dumps(rec.get("draft_blocks") or [])
     frappe.get_doc(payload).insert()
     routes.append(rec["route"])
 
