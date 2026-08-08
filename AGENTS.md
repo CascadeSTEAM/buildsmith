@@ -132,6 +132,7 @@ and it is not "if this looks risky".
 | `builder-golive` | go-live choreography; execution belongs to OpsKit |
 | `builder-optimize` | W3: builderize a site in the sandbox — baseline, transform, oracle (ADR-009) |
 | `dogfood-cycle` | run it for real, fail, fix, retry until MVP; as a release phase, log-don't-fix (ADR-011) |
+| `plow` | batch-clear the GitHub backlog — PR queue first, then dedupe, prioritize, and work issues one at a time through the improvement cycle |
 
 Each one's first instruction is to load OpsKit's `frappe-access` skill for the
 access-path decision. A new skill is registered in this table in the same commit
