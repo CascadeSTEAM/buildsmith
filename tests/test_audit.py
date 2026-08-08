@@ -216,6 +216,33 @@ class PrePushTest(unittest.TestCase):
         self.assertEqual(leaked, [], f"GIT_* leaked into the child suite: {leaked}")
         self.assertEqual(child_env.get(prepush._IN_SUITE), "1")
 
+    def test_the_spawned_suite_is_buffered(self) -> None:
+        """#1: several tests exercise a real refusal path on purpose and
+        print the real message doing it — correct for what they test, but
+        with no buffering, that output streamed straight through this
+        subprocess's inherited stdout/stderr into the hook's own terminal,
+        interleaved with the actual gate verdicts for the push in
+        progress. -b discards a passing test's output and keeps it only
+        for a failure."""
+        import subprocess
+
+        from buildsmith.tools import prepush
+
+        captured: dict = {}
+        old_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return type("P", (), {"returncode": 0})()
+
+        subprocess.run = fake_run  # type: ignore[assignment]
+        try:
+            prepush.run_suite()
+        finally:
+            subprocess.run = old_run  # type: ignore[assignment]
+
+        self.assertIn("-b", captured["cmd"])
+
     def test_the_suite_is_not_spawned_from_inside_itself(self) -> None:
         """prepush spawns the suite; the suite contains this test; without a
         recursion guard an unstubbed call would fork forever. The marker must
