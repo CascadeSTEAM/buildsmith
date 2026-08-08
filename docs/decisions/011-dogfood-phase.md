@@ -33,6 +33,18 @@ ones that live in the gaps between components.
    error text for anything the guards would have to catch — and probes the
    guards themselves. Findings get the `leak-watch` label; anything above
    theoretical is a `P0-blocker`.
+
+   **Any probe that stages content ends with `git gc --prune=now`.**
+   `git add` creates a blob in the object store the moment it runs, whether
+   or not anything is ever committed — `git reset` un-stages the change but
+   does not remove the blob. Skip the `gc` and the probe's own token-bearing
+   test content sits in `.git` as an unreachable object, and the *next*
+   push's history audit refuses on it — confusingly, for whoever pushes
+   next, over a leak that was never committed (found the hard way, #6).
+   An unreachable blob left this way is not equivalent to a committed one —
+   see the note on `buildsmith audit`'s message below — but it is real
+   object-store residue and the gate is right to insist it be cleaned up
+   deliberately rather than left for someone else to puzzle over.
 4. **Issues are public.** Issue text follows the same rule as commits and
    branch names: nothing client-identifying, ever — `a real site`, `<site>`,
    bucketed figures. The guard cannot read what gets typed into a browser;

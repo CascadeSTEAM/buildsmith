@@ -324,6 +324,19 @@ def audit(scope: str = "all") -> Report:
         #
         # Deduplicated by blob SHA, so identical content across commits is read
         # once. Text only — a binary blob has no lines to report.
+        # `rev-list --objects --all` lists exactly what `git push` sends:
+        # every object reachable from some ref. Computed once, ahead of the
+        # blob scan below, so one call serves two purposes — the reachable
+        # set decides what a finding SAYS (#6: the old wording claimed every
+        # history-blob finding "will be published with the repository",
+        # which is true only for a reachable object; an unreachable one —
+        # staged then reset, never committed, still sitting in the object
+        # store — is not sent by `git push` at all, only by a full `.git`
+        # copy or bundle. Overstating the reachable risk undersold the real
+        # one) — and the historical-paths sweep a few lines down.
+        rev_list = _git("rev-list", "--objects", "--all").splitlines()
+        reachable = {ln.split()[0] for ln in rev_list if ln}
+
         seen_blobs: set[str] = set()
         batch = _git("cat-file", "--batch-all-objects",
                      "--batch-check=%(objectname) %(objecttype) %(objectsize)")
@@ -340,16 +353,30 @@ def audit(scope: str = "all") -> Report:
                 continue
             for token in tokens:
                 if re.search(rf"\b{re.escape(token)}\b", content, re.I):
+                    if sha in reachable:
+                        # "A ref" — not "the branch you're about to push":
+                        # `--all` walks every local ref, including a
+                        # scratch branch nobody has pushed yet. Overclaiming
+                        # "git push will send it" here would be the mirror
+                        # image of the bug this message exists to fix
+                        # (review on #6's own PR).
+                        risk = ("It is reachable from a ref — pushing that "
+                               "ref (this one or another) will send it.")
+                    else:
+                        risk = (
+                            "It is NOT reachable from any ref, so a plain `git push` "
+                            "will not send it — but it still lives in the local .git "
+                            "object store and leaks via a full clone, a `.git` copy, "
+                            "or a bundle. `git gc --prune=now` removes it."
+                        )
                     report.findings.append(Finding(
                         f"(history blob {sha[:10]})", "client-token",
-                        f"a past version of a file contains {token!r}. It is still in the "
-                        "object store and will be published with the repository."
+                        f"a past version of a file contains {token!r}. {risk}"
                     ))
                     break
         report.scanned["history_blobs"] = len(seen_blobs)
 
-        blobs = [ln.split()[-1] for ln in _git("rev-list", "--objects", "--all").splitlines()
-                 if " " in ln]
+        blobs = [ln.split()[-1] for ln in rev_list if " " in ln]
         report.scanned["historical_paths"] = len(blobs)
         for path in set(blobs):
             for token in tokens:
