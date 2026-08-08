@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from buildsmith.tools.gitenv import hermetic_env
+from buildsmith.tools.gitenv import hermetic_env, run_git
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -90,13 +90,7 @@ class PublicationGuardTest(unittest.TestCase):
 
     @classmethod
     def _git(cls, *args: str) -> subprocess.CompletedProcess:
-        # hermetic_git_env, not os.environ: under a hook, an inherited GIT_DIR
-        # would point every one of these calls at the real repository (#23).
-        return subprocess.run(
-            ["git", "-C", str(cls.repo), *args],
-            capture_output=True, text=True, check=False,
-            env=hermetic_env(),
-        )
+        return run_git("-C", str(cls.repo), *args)
 
     def _guard(self, *args: str, **overrides: str) -> subprocess.CompletedProcess:
         # The guard spawns git of its own; it must inherit no GIT_* either.

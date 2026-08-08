@@ -12,7 +12,7 @@ from __future__ import annotations
 import unittest
 
 from buildsmith.tools.audit import scan_text
-from buildsmith.tools.gitenv import hermetic_env
+from buildsmith.tools.gitenv import run_git
 from tests.fixtures import (
     CLIENT_DOMAIN as CLIENT,
 )
@@ -265,7 +265,6 @@ class HistoryBlobTest(unittest.TestCase):
     """
 
     def test_a_token_only_in_history_is_found(self) -> None:
-        import subprocess
         import tempfile
         from pathlib import Path
 
@@ -274,11 +273,7 @@ class HistoryBlobTest(unittest.TestCase):
         token = "acme" + "corp"
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            run = lambda *a: subprocess.run(  # noqa: E731
-                ["git", "-C", str(repo), *a],
-                capture_output=True, text=True, check=False,
-                env=hermetic_env(),
-            )
+            run = lambda *a: run_git("-C", str(repo), *a)  # noqa: E731
             run("init", "-q", "-b", "main")
             run("config", "user.name", "t")
             run("config", "user.email", "t@example.invalid")

@@ -24,6 +24,7 @@ scrubbing it would make the guard check the wrong staged set.
 from __future__ import annotations
 
 import os
+import subprocess
 
 
 def hermetic_env(**overrides: str) -> dict[str, str]:
@@ -31,3 +32,23 @@ def hermetic_env(**overrides: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(overrides)
     return env
+
+
+def run_git(*args: str, cwd: str | None = None, hermetic: bool = True,
+            **kwargs) -> subprocess.CompletedProcess:
+    """Run git, hermetic by default.
+
+    An opt-in helper is a helper a call site can forget — #23's own fix
+    shipped two call sites (hooks.py, journal.py) that still ran bare `git
+    -C <root>` on the unscrubbed environment, because scrubbing was
+    something each `_git()` had to remember to do rather than something
+    `git` itself did. Defaulting to hermetic here means a new call site has
+    to opt *out*, loudly, not opt in silently by omission — `hermetic=False`
+    is for the rare case (guard.py's pre-commit path) where GIT_INDEX_FILE
+    is load-bearing, never the default shape.
+    """
+    env = hermetic_env() if hermetic else dict(os.environ)
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    kwargs.setdefault("check", False)
+    return subprocess.run(["git", *args], cwd=cwd, env=env, **kwargs)

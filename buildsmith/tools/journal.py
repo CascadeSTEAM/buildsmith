@@ -34,6 +34,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from buildsmith.tools.gitenv import run_git
+
 ROOT = Path(__file__).resolve().parents[2]
 
 __all__ = ["Entry", "append", "journal_dir", "read_entries", "render"]
@@ -66,17 +68,11 @@ def _builder_pin(root: Path | None = None) -> dict[str, str]:
 def _tooling_revision(root: Path | None = None) -> str:
     """Which Buildsmith produced this. Best effort — a dirty tree says so."""
     try:
-        rev = subprocess.run(
-            ["git", "-C", str(root or ROOT), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-        )
+        rev = run_git("-C", str(root or ROOT), "rev-parse", "--short", "HEAD", timeout=5)
         if rev.returncode != 0:
             return "unknown"
         head = rev.stdout.strip()
-        dirty = subprocess.run(
-            ["git", "-C", str(root or ROOT), "status", "--porcelain"],
-            capture_output=True, text=True, timeout=5,
-        )
+        dirty = run_git("-C", str(root or ROOT), "status", "--porcelain", timeout=5)
         return f"{head}-dirty" if dirty.stdout.strip() else head
     except (OSError, subprocess.SubprocessError):
         return "unknown"
