@@ -760,6 +760,21 @@ class RefuseStaleCheckpoint(unittest.TestCase):
             tokenize._refuse_stale_checkpoint("acme")
         self.assertIn("REFUSED", str(cm.exception))
 
+    def test_the_refusal_names_the_safe_recovery_from_an_interrupted_apply(self):
+        # #18: re-baselining straight over a killed-mid-run apply would
+        # bless the broken half-apply as the new reference forever. The
+        # message has to say "oracle first", not just "re-run baseline".
+        self._write_manifest("acme", "aaa111aaa111")
+        capture_dev.read_state = lambda target: {"sentinel": True}
+        capture_dev._content_hash = lambda state: "bbb222bbb222"
+
+        with self.assertRaises(SystemExit) as cm:
+            tokenize._refuse_stale_checkpoint("acme")
+        message = str(cm.exception)
+        self.assertIn("interrupted", message)
+        self.assertIn("optimize oracle", message)
+        self.assertIn("do NOT re-baseline yet", message)
+
     def test_missing_manifest_raises_mentioning_baseline(self):
         # No manifest.json written at all for this site.
         with self.assertRaises(SystemExit) as cm:

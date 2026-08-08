@@ -436,7 +436,15 @@ def _refuse_stale_checkpoint(site: str, *,
             "REFUSED: the sandbox has changed since the baseline checkpoint "
             f"(hash {recorded[:12]} -> {current[:12]}). Re-run `buildsmith "
             "optimize baseline` so the rewrite sources current trees — "
-            "applying from a stale checkpoint would overwrite the change.")
+            "applying from a stale checkpoint would overwrite the change.\n\n"
+            "If this drift is from an apply that got interrupted (killed "
+            "mid-run, crashed): do NOT re-baseline yet — that would bless a "
+            "possibly-broken half-apply as the new reference forever. Run "
+            "`buildsmith optimize oracle` first, against the CURRENT "
+            "checkpoint, to prove the sandbox still renders like it did "
+            "before the interruption (or catch that it does not). Only "
+            "then `buildsmith optimize baseline --force` (waives the "
+            "pending gate entry, recorded in the ledger) and re-apply.")
 
 
 def check_resolution(clone_url: str, uuids: list[str],
