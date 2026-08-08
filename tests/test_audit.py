@@ -343,13 +343,17 @@ class HistoryBlobMessageMatchesActualRisk(unittest.TestCase):
     the reachable risk undersold the real one (leaks via a full clone, a
     `.git` copy, or a bundle — not via `git push`)."""
 
-    def _repo(self, tmp) -> Path:
+    def _repo(self, tmp):
+        """Returns `(repo, run)` — one place that builds the git-in-repo
+        call, so a future change to it (an extra flag, error checking) does
+        not have to be found and re-applied in every test method (review on
+        #6's own PR)."""
         repo = Path(tmp)
         run = lambda *a: run_git("-C", str(repo), *a)  # noqa: E731
         run("init", "-q", "-b", "main")
         run("config", "user.name", "t")
         run("config", "user.email", "t@example.invalid")
-        return repo
+        return repo, run
 
     def _findings_for(self, repo: Path, token: str) -> list:
         import os
@@ -364,11 +368,10 @@ class HistoryBlobMessageMatchesActualRisk(unittest.TestCase):
         finally:
             audit.ROOT = old_root
 
-    def test_a_committed_reachable_blob_says_push_will_send_it(self) -> None:
+    def test_a_committed_reachable_blob_says_a_push_will_send_it(self) -> None:
         token = "acme" + "corp"
         with tempfile.TemporaryDirectory() as tmp:
-            repo = self._repo(tmp)
-            run = lambda *a: run_git("-C", str(repo), *a)  # noqa: E731
+            repo, run = self._repo(tmp)
             (repo / "notes.md").write_text(f"the {token} rollout\n")
             run("add", "-A")
             run("commit", "-q", "-m", "TKT-1: notes")
@@ -377,7 +380,10 @@ class HistoryBlobMessageMatchesActualRisk(unittest.TestCase):
 
         blob_findings = [f for f in findings if "history blob" in f.where]
         self.assertTrue(blob_findings, findings)
-        self.assertIn("git push` will send it", blob_findings[0].detail)
+        # "a ref" — not "the branch you're about to push": rev-list --all
+        # walks every local ref, including one nobody has pushed yet.
+        self.assertIn("reachable from a ref", blob_findings[0].detail)
+        self.assertIn("will send it", blob_findings[0].detail)
         self.assertNotIn("NOT reachable", blob_findings[0].detail)
 
     def test_a_staged_then_reset_unreachable_blob_names_gc_not_push(self) -> None:
@@ -386,8 +392,7 @@ class HistoryBlobMessageMatchesActualRisk(unittest.TestCase):
         # but the blob is real object-store residue.
         token = "acme" + "corp"
         with tempfile.TemporaryDirectory() as tmp:
-            repo = self._repo(tmp)
-            run = lambda *a: run_git("-C", str(repo), *a)  # noqa: E731
+            repo, run = self._repo(tmp)
             # A repo with zero commits has no ref for rev-list to walk from
             # — an unrelated real commit first keeps this scenario honest.
             (repo / "readme.md").write_text("hello\n")

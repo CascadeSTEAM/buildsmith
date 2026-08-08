@@ -354,7 +354,14 @@ def audit(scope: str = "all") -> Report:
             for token in tokens:
                 if re.search(rf"\b{re.escape(token)}\b", content, re.I):
                     if sha in reachable:
-                        risk = "It is reachable from a ref, so `git push` will send it."
+                        # "A ref" — not "the branch you're about to push":
+                        # `--all` walks every local ref, including a
+                        # scratch branch nobody has pushed yet. Overclaiming
+                        # "git push will send it" here would be the mirror
+                        # image of the bug this message exists to fix
+                        # (review on #6's own PR).
+                        risk = ("It is reachable from a ref — pushing that "
+                               "ref (this one or another) will send it.")
                     else:
                         risk = (
                             "It is NOT reachable from any ref, so a plain `git push` "
