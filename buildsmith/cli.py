@@ -376,9 +376,16 @@ def cmd_optimize(args: argparse.Namespace) -> int:
         except baseline_mod.CannotCapture as exc:
             print(f"COULD NOT CHECK: {exc}", file=sys.stderr)
             return EXIT_UNCHECKED
-        print(f"baseline captured: {len(manifest['routes_captured'])} routes"
-              f" x {len(manifest['viewports'])} viewports, "
-              f"{manifest['scripts_scanned']} scripts scanned")
+        route_summary = (f"baseline captured: {len(manifest['routes_captured'])} routes"
+                        f" x {len(manifest['viewports'])} viewports")
+        scripts_scanned = manifest["scripts_scanned"]
+        if isinstance(scripts_scanned, str):
+            # "UNSCANNED — ..." already reads as a complete sentence;
+            # appending "scripts scanned" produced two fragments jammed
+            # together with no punctuation between them (#17).
+            print(f"{route_summary}, {scripts_scanned}")
+        else:
+            print(f"{route_summary}, {scripts_scanned} scripts scanned")
         for route, status in manifest["routes_skipped"].items():
             print(f"  skipped {route!r}: HTTP {status} (unpublished?)")
         journal.append(args.site, "optimize baseline",
