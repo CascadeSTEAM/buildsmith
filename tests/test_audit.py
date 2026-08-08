@@ -9,7 +9,9 @@ the regex.
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from buildsmith.tools.audit import scan_text
@@ -331,3 +333,75 @@ class HistoryBlobTest(unittest.TestCase):
                 "the token must still be reachable in the object store — if this "
                 "fails the fixture is wrong, not the scanner",
             )
+
+
+class HistoryBlobMessageMatchesActualRisk(unittest.TestCase):
+    """#6: the old wording claimed every history-blob finding "will be
+    published with the repository" — true for a reachable object, but a
+    probe that stages content and resets (never commits) leaves an
+    UNREACHABLE blob that a plain `git push` never sends at all. Overstating
+    the reachable risk undersold the real one (leaks via a full clone, a
+    `.git` copy, or a bundle — not via `git push`)."""
+
+    def _repo(self, tmp) -> Path:
+        repo = Path(tmp)
+        run = lambda *a: run_git("-C", str(repo), *a)  # noqa: E731
+        run("init", "-q", "-b", "main")
+        run("config", "user.name", "t")
+        run("config", "user.email", "t@example.invalid")
+        return repo
+
+    def _findings_for(self, repo: Path, token: str) -> list:
+        import os
+
+        from buildsmith.tools import audit
+
+        old_root = audit.ROOT
+        audit.ROOT = repo
+        try:
+            with mock.patch.dict(os.environ, {"CLIENT_TOKENS": token}):
+                return audit.audit(scope="history").findings
+        finally:
+            audit.ROOT = old_root
+
+    def test_a_committed_reachable_blob_says_push_will_send_it(self) -> None:
+        token = "acme" + "corp"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(tmp)
+            run = lambda *a: run_git("-C", str(repo), *a)  # noqa: E731
+            (repo / "notes.md").write_text(f"the {token} rollout\n")
+            run("add", "-A")
+            run("commit", "-q", "-m", "TKT-1: notes")
+
+            findings = self._findings_for(repo, token)
+
+        blob_findings = [f for f in findings if "history blob" in f.where]
+        self.assertTrue(blob_findings, findings)
+        self.assertIn("git push` will send it", blob_findings[0].detail)
+        self.assertNotIn("NOT reachable", blob_findings[0].detail)
+
+    def test_a_staged_then_reset_unreachable_blob_names_gc_not_push(self) -> None:
+        # The exact scenario #6 reports: a probe stages a token-bearing
+        # file, checks the guard, then resets — nothing is ever committed,
+        # but the blob is real object-store residue.
+        token = "acme" + "corp"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(tmp)
+            run = lambda *a: run_git("-C", str(repo), *a)  # noqa: E731
+            # A repo with zero commits has no ref for rev-list to walk from
+            # — an unrelated real commit first keeps this scenario honest.
+            (repo / "readme.md").write_text("hello\n")
+            run("add", "-A")
+            run("commit", "-q", "-m", "init")
+
+            (repo / "probe.md").write_text(f"the {token} probe\n")
+            run("add", "-A")
+            run("reset", "-q")
+
+            findings = self._findings_for(repo, token)
+
+        blob_findings = [f for f in findings if "history blob" in f.where]
+        self.assertTrue(blob_findings, findings)
+        self.assertIn("NOT reachable", blob_findings[0].detail)
+        self.assertIn("git gc --prune=now", blob_findings[0].detail)
+        self.assertNotIn("will send it", blob_findings[0].detail)
