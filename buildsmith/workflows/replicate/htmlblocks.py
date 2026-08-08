@@ -184,7 +184,16 @@ class _Builder(HTMLParser):
         #: (#15). Rebuilt verbatim from parser events into one opaque block
         #: instead of walked like ordinary HTML.
         self._capturing_svg = False
-        self._svg_depth = 0
+        #: Open tag names since capture started, mirroring `self.stack`'s
+        #: own "unwind to nearest matching open element" recovery — a raw
+        #: depth counter desyncs permanently on any unclosed non-void SVG
+        #: child (a minifier that drops the `/` on `<circle .../>`, or a
+        #: bare `<img>` inside `<foreignObject>`): `html.parser` never
+        #: fires the missing end-tag callback, so a counter that increments
+        #: on every starttag never comes back down, and the real `</svg>`
+        #: — plus everything the document has left — gets silently
+        #: swallowed into the buffer forever (review on #15's own PR).
+        self._svg_stack: list[str] = []
         self._svg_buffer: list[str] = []
         self.svg_count = 0
         self.stylesheet: list[str] = []
@@ -221,12 +230,12 @@ class _Builder(HTMLParser):
 
         if self._capturing_svg:
             self._svg_buffer.append(self._render_starttag(tag, attrs))
-            self._svg_depth += 1
+            self._svg_stack.append(tag)
             return
 
         if tag == "svg":
             self._capturing_svg = True
-            self._svg_depth = 1
+            self._svg_stack = ["svg"]
             self._svg_buffer = [self._render_starttag(tag, attrs)]
             return
 
@@ -295,6 +304,23 @@ class _Builder(HTMLParser):
         if tag not in VOID_ELEMENTS:
             self.stack.append(block)
 
+    def _finish_svg_capture(self) -> None:
+        """Emit the buffered `<svg>...` subtree as one opaque leaf block."""
+        self._capturing_svg = False
+        markup = "".join(self._svg_buffer)
+        self._svg_buffer = []
+        self._svg_stack = []
+        self.svg_count += 1
+        self.element_count += 1
+        # A div wrapper, not element="svg": innerHTML is set through a real
+        # DOM API, which parses embedded foreign-namespace markup correctly
+        # regardless of the parent tag — no need for Builder's block schema
+        # to know "svg" as an element type. Not pushed onto self.stack: it's
+        # a leaf, opaque.
+        self.stack[-1].setdefault("children", []).append(
+            {"element": "div", "innerHTML": markup}
+        )
+
     def handle_endtag(self, tag: str) -> None:
         if self._skipping:
             if tag == self._skipping:
@@ -306,21 +332,17 @@ class _Builder(HTMLParser):
             return
         if self._capturing_svg:
             self._svg_buffer.append(f"</{tag}>")
-            self._svg_depth -= 1
-            if self._svg_depth <= 0:
-                self._capturing_svg = False
-                markup = "".join(self._svg_buffer)
-                self._svg_buffer = []
-                self.svg_count += 1
-                self.element_count += 1
-                # A div wrapper, not element="svg": innerHTML is set through
-                # a real DOM API, which parses embedded foreign-namespace
-                # markup correctly regardless of the parent tag — no need
-                # for Builder's block schema to know "svg" as an element
-                # type. Not pushed onto self.stack: it's a leaf, opaque.
-                self.stack[-1].setdefault("children", []).append(
-                    {"element": "div", "innerHTML": markup}
-                )
+            if tag in self._svg_stack:
+                # Nearest-match unwind, same principle as the recovery a
+                # few lines below for the main tree: an end tag closes
+                # everything open above its matching start tag too, so one
+                # missing inner close (a dropped self-closing slash) can't
+                # desync tracking and swallow the real </svg> along with
+                # the rest of the document.
+                index = len(self._svg_stack) - 1 - self._svg_stack[::-1].index(tag)
+                del self._svg_stack[index:]
+            if tag == "svg" and "svg" not in self._svg_stack:
+                self._finish_svg_capture()
             return
         if tag in VOID_ELEMENTS or tag in SKIPPED_ELEMENTS:
             return
@@ -368,6 +390,19 @@ class _Builder(HTMLParser):
             return
         if data.strip():
             self.dropped.append("HTML comment dropped")
+
+    def close(self) -> None:
+        super().close()
+        if self._capturing_svg:
+            # A truncated crawl fetch, or hand-edited markup, can end the
+            # document before its <svg> closes. Flush what was buffered
+            # rather than discarding it silently — "content is never
+            # silently dropped" applies here too (review on #15's own PR).
+            self.dropped.append(
+                "<svg> never closed before end of document — buffered "
+                "subtree flushed as-is"
+            )
+            self._finish_svg_capture()
 
 
 _RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
