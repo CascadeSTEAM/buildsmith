@@ -134,9 +134,11 @@ and it is not "if this looks risky".
 | `dogfood-cycle` | run it for real, fail, fix, retry until MVP; as a release phase, log-don't-fix (ADR-011) |
 | `plow` | batch-clear the GitHub backlog — PR queue first, then dedupe, prioritize, and work issues one at a time through the improvement cycle |
 
-Each one's first instruction is to load OpsKit's `frappe-access` skill for the
-access-path decision. A new skill is registered in this table in the same commit
-that adds it — `tests/test_skills.py` fails otherwise.
+Every skill whose work reaches a Frappe site starts by loading OpsKit's
+`frappe-access` skill for the access-path decision; process skills (`plow`,
+`dogfood-cycle`) instead route any live-system need to an OpsKit subagent. A new
+skill is registered in this table in the same commit that adds it —
+`tests/test_skills.py` fails otherwise.
 
 ## The CLI is the interface
 

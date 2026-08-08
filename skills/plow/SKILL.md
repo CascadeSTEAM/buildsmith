@@ -26,11 +26,13 @@ can run it without any other project.
 2. **Collect & prioritize** — `gh pr list --state open`, ordered by the
    triad: **simple over complex, important over less-immediate, impact over
    cosmetic**.
-3. **One PR at a time.** Produce a real review — a PR is never "reviewed"
-   by assertion. Run `/code-review` against it and post the findings to the
-   PR; add `/security-review` when the change touches the git hooks, the
-   publication guard, gitleaks config, CI, or `frappe_client.py`. Fix
-   findings in a worktree of the PR branch (`git worktree add` under
+3. **One PR at a time.** Produce a real review. Run `/code-review` against
+   it and post the findings to the PR; add `/security-review` when the
+   change touches auth, secrets or credentials in any form, the git hooks,
+   the publication guard, gitleaks config, CI, or `frappe_client.py`. In a
+   harness without those built-in reviewers, post an explicit review pass
+   to the PR instead — a PR is never "reviewed" by assertion. Fix findings
+   in a worktree of the PR branch (`git worktree add` under
    `.claude/worktrees/`, never by switching a shared checkout), then
    commit, push, and wait for CI on the new head.
 4. **Merge on green.** Invoking /plow authorizes the merge: the external
@@ -58,8 +60,7 @@ can run it without any other project.
 7. For each issue in priority order — strictly one in flight — run the
    improvement cycle end to end:
    - **Propose.** Root-cause it in the actual code, then post the plan as
-     an issue comment. Issues are public and no guard reads them — nothing
-     client-identifying, ever ("a real site", never whose).
+     an issue comment (public text — the forge-writes rule below applies).
    - **Critique & research.** Attack the plan before implementing it:
      check `docs/traps.md`, the ADRs, and the code it touches. Resolve the
      findings into the final plan.
@@ -80,19 +81,20 @@ can run it without any other project.
 
 - Repo hard rules stay in force: linked branch (never `main`), the full
   test gate, the publication guard and gitleaks (never disabled — refused
-  work is genericised, not forced through), document-as-you-go. One
-  deliberate, operator-set relaxation: reviewer ≠ author is satisfied by
-  *requesting* the external reviewer — a pending review does not block a
-  /plow merge (step 4).
+  work is genericised, not forced through), document-as-you-go. The one
+  deliberate, operator-set relaxation is step 4's pending-review merge.
+- **Everything /plow writes to the forge is public** — review findings,
+  triage and duplicate-close comments, issue plans, PR text. The guards
+  only read commits; nothing reads what gets posted, so this one is on the
+  writer: nothing client-identifying, ever ("a real site", never whose).
 - /plow pre-authorizes exactly two things: merging per step 4 and closing
   unambiguous duplicates. Anything else unrequested is offered, not done.
 - During a dogfood *phase* observation run (ADR-011), only a `P0-blocker`
   is fixed mid-run — the run measures the product, and fixing under it
   changes the thing being measured. Between runs, the current milestone's
   backlog is exactly plow material: emptying it is how the phase ends.
-- An issue needing live-infrastructure work is not plow material — skip it
-  and say why (environment, access, and session-start sequence need a
-  dedicated OpsKit session).
+- Live-infrastructure issues are excluded per step 1 — skipped and offered
+  to an OpsKit subagent, never worked here.
 
 ## Failure handling
 
