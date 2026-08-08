@@ -75,6 +75,34 @@ def scan_script(name: str, script_type: str, body: str) -> dict:
     return {"name": name, "script_type": script_type, "touches": found}
 
 
+def collect_script_records(site_root: Path) -> tuple[list[dict], str]:
+    """Every client-script source this site has, with a label saying which.
+
+    Two sources, matching the two ways a site arrives (ADR-008): an adopted
+    site's live export carries Builder Client Script records; an imported
+    clone carries its page scripts as head JS assets (`assets/*-head-*.js`,
+    TRAP-018 — Builder would Jinja-refuse them inline). An empty result means
+    the caller must say UNSCANNED out loud, never ship an empty scan.
+    """
+    records: list[dict] = []
+    source = ""
+    export = site_root / "live-export" / "doctypes" / "builder-client-script.json"
+    if export.exists():
+        records += json.loads(export.read_text())
+        source = "live-export"
+    assets = site_root / "assets"
+    head_js = sorted(assets.glob("*-head-*.js")) if assets.is_dir() else []
+    if head_js:
+        records += [
+            {"name": f.name, "script_type": "JavaScript",
+             "script": f.read_text(encoding="utf-8", errors="replace")}
+            for f in head_js
+        ]
+        source = (source + " + " if source else "") + \
+            f"assets/*-head-*.js ({len(head_js)})"
+    return records, source
+
+
 def scan_scripts(records: list[dict]) -> dict:
     """Scan every Builder Client Script record; see scan_script."""
     scans = [scan_script(r.get("name", "?"), r.get("script_type", ""),
@@ -189,17 +217,15 @@ def build_baseline(site: str, *, clone_url: str = "http://127.0.0.1:8000",
     shoot = shooter or shots_mod.capture_shots
     written = shoot(clone_url, captured, shots_dir)
 
-    # 5. script-dependency scan. Source: the live export the site was adopted
-    #    from — the record checkpoint does not capture client scripts (yet;
-    #    that lands with the scripts-disposition transform). When the source
-    #    is absent the manifest says so out loud rather than shipping an
-    #    empty scan that reads as "no scripts".
-    export = ROOT / "sites" / site / "live-export" / "doctypes" / \
-        "builder-client-script.json"
-    scan_source = ""
-    if export.exists():
-        script_records = json.loads(export.read_text())
-        scan_source = str(export.relative_to(ROOT))
+    # 5. script-dependency scan. Two sources, matching the two ways a site
+    #    arrives (ADR-008): an adopted site's live export carries Builder
+    #    Client Script records; an imported clone carries its page scripts as
+    #    head JS assets (`assets/*-head-*.js`, TRAP-018 — Builder would
+    #    Jinja-refuse them inline). When neither exists the manifest says so
+    #    out loud rather than shipping an empty scan that reads as "no
+    #    scripts".
+    script_records, scan_source = collect_script_records(ROOT / "sites" / site)
+    if script_records:
         scan = scan_scripts(script_records)
         (out / "scripts-scan.json").write_text(json.dumps(scan, indent=2) + "\n")
         scripts_scanned: int | str = scan["_meta"]["scripts"]

@@ -1604,3 +1604,54 @@ class MineComponentize(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScriptSourceDiscoveryTest(unittest.TestCase):
+    """Collapse refuses without a script scan, so the scan must find scripts
+    wherever the site's arrival path put them (ADR-008): live-export records
+    for adopted sites, head JS assets for imported clones (TRAP-018 moved
+    inline scripts to files — which silently emptied the old scanner)."""
+
+    def test_head_js_assets_are_a_script_source(self):
+        import tempfile
+        from pathlib import Path
+
+        from buildsmith.workflows.optimize.baseline import collect_script_records
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "assets").mkdir()
+            (root / "assets" / "example-head-index-0.js").write_text(
+                "document.querySelector('.menu-open')")
+            records, source = collect_script_records(root)
+            self.assertEqual(len(records), 1)
+            self.assertIn("head", records[0]["name"])
+            self.assertIn("assets/*-head-*.js", source)
+
+    def test_both_sources_combine(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from buildsmith.workflows.optimize.baseline import collect_script_records
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "live-export" / "doctypes").mkdir(parents=True)
+            (root / "live-export" / "doctypes" / "builder-client-script.json"
+             ).write_text(json.dumps([{"name": "s1", "script_type": "JavaScript",
+                                       "script": "x()"}]))
+            (root / "assets").mkdir()
+            (root / "assets" / "example-head-menu-0.js").write_text("y()")
+            records, source = collect_script_records(root)
+            self.assertEqual(len(records), 2)
+            self.assertIn("live-export", source)
+            self.assertIn("head", source)
+
+    def test_no_source_is_empty_and_says_so(self):
+        import tempfile
+        from pathlib import Path
+
+        from buildsmith.workflows.optimize.baseline import collect_script_records
+        with tempfile.TemporaryDirectory() as tmp:
+            records, source = collect_script_records(Path(tmp))
+            self.assertEqual(records, [])
+            self.assertEqual(source, "")
