@@ -239,7 +239,7 @@ def up(*, allow_loose: bool = False) -> int:
     print(f"\n  Builder pinned at: {pins.builder} ({pins.get('BUILDER_REF_STATUS')})")
     print(f"  Editor: http://127.0.0.1:8000/builder  (Administrator / "
           f"{pins['ADMIN_PASSWORD']})")
-    print("  Next: buildsmith check trap")
+    print("  Next: buildsmith check traps")
     return 0
 
 
