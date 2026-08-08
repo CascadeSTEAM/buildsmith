@@ -226,7 +226,7 @@ def apply(site: str, *, clone_url: str = "http://127.0.0.1:8000",
         # applied-but-unproved gate. Library-level so no caller skips it.
         from buildsmith.workflows.optimize import gates
 
-        gates.record_apply(site, "fonts")
+        gates.record_apply(site, "fonts", target=target)
         script = f"""
 import frappe, json
 frappe.init({json.dumps(target)}); frappe.connect()

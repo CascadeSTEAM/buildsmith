@@ -26,10 +26,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 __all__ = [
+    "any_pending",
     "assert_no_pending",
     "pending",
     "record_apply",
     "record_oracle",
+    "transform_names",
 ]
 
 
@@ -66,16 +68,21 @@ def baseline_hash(site: str) -> str | None:
     return json.loads(manifest.read_text()).get("content_hash")
 
 
-def record_apply(site: str, transform: str) -> dict:
-    """Record that `transform` mutated the sandbox. Pending until proved.
+def record_apply(site: str, transform: str, *, target: str = "sandbox.localhost") -> dict:
+    """Record that `transform` mutated `target`. Pending until proved.
 
     Called immediately after an apply returns — even one whose own assertion
     failed — because the mutation has happened either way, and a mutation
     with no oracle verdict is exactly what the ledger exists to surface.
+
+    `target` matters because every optimize apply accepts `--target` (#20's
+    review): a pending entry against some other host says nothing about
+    whether `sandbox.localhost` itself is dirty.
     """
     data = _load(site)
     entry = {
         "transform": transform,
+        "target": target,
         "baseline_hash": baseline_hash(site),
         "applied_at": _now(),
         "oracle": None,
@@ -84,6 +91,18 @@ def record_apply(site: str, transform: str) -> dict:
     data["entries"].append(entry)
     _save(site, data)
     return entry
+
+
+def transform_names(entries: list[dict]) -> str:
+    """A sorted, deduped, comma-joined list of entries' transform names.
+
+    One place for the message every pending-entry refusal builds, so the
+    `.get` fail-closed convention this module documents (a human may edit
+    the ledger; a missing key must read as "not proved", never crash the
+    check that's about to report it) applies wherever entries are reported,
+    not just wherever `_is_pending` reads them.
+    """
+    return ", ".join(sorted({e.get("transform", "unknown") for e in entries}))
 
 
 def _is_pending(entry: dict) -> bool:
@@ -120,6 +139,35 @@ def pending(site: str) -> list[dict]:
     return [entry for entry in _load(site)["entries"] if _is_pending(entry)]
 
 
+def any_pending(target: str = "sandbox.localhost") -> dict[str, list[dict]]:
+    """Every site with an applied-but-unproved transform against `target`.
+
+    Every optimize apply accepts `--target`, so a pending entry does not by
+    itself mean `target` is dirty — only an entry recorded *against* it
+    does. An entry with no `target` key (written before this field existed)
+    still counts: fails closed, the same way a missing `oracle` counts as
+    unproved rather than assumed-fine (`_is_pending`).
+
+    A tool about to mutate `target` in a way that isn't scoped to its own
+    fixtures (#20) should refuse while this is non-empty, the same way
+    `assert_no_pending` refuses a re-baseline.
+    """
+    sites_dir = ROOT / "sites"
+    if not sites_dir.is_dir():
+        return {}
+    found = {}
+    for site_dir in sorted(sites_dir.iterdir()):
+        if not site_dir.is_dir():
+            continue
+        open_entries = [
+            e for e in pending(site_dir.name)
+            if e.get("target", target) == target
+        ]
+        if open_entries:
+            found[site_dir.name] = open_entries
+    return found
+
+
 def assert_no_pending(site: str, *, force: bool = False) -> list[dict]:
     """Refuse while any applied transform lacks a passing oracle.
 
@@ -133,7 +181,7 @@ def assert_no_pending(site: str, *, force: bool = False) -> list[dict]:
     if not open_entries:
         return []
     if not force:
-        names = ", ".join(sorted({e["transform"] for e in open_entries}))
+        names = transform_names(open_entries)
         raise SystemExit(
             f"{len(open_entries)} applied transform(s) have no passing oracle: "
             f"{names}. Re-baselining now would absorb the unproven change into "

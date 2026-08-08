@@ -125,7 +125,7 @@ def render(data: dict) -> str:
     pending = data["gates"]["pending"]
     if pending:
         lines.append("")
-        names = ", ".join(sorted({e["transform"] for e in pending}))
+        names = gates.transform_names(pending)
         lines.append(
             f"!! {len(pending)} applied transform(s) with no passing oracle: "
             f"{names}"

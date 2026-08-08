@@ -138,6 +138,48 @@ print("VERIFIED:" + json.dumps(out))
 """
 
 
+def _clean_slate_script(second_site: str = SECOND_SITE) -> str:
+    """The python script that clears fixtures before AUTHOR runs.
+
+    A pure string builder, factored out so #20's fix — sandbox.localhost
+    keeps only its own named fixtures, never a blanket Variable/Component
+    wipe — is a single thing to pin in a test, without mocking the whole
+    docker-compose subprocess chain that surrounds it.
+    """
+    return (
+        "import frappe\n"
+        # sandbox.localhost (#20): NOT a blanket wipe. It is the shared
+        # bench every optimize transform targets by default, so deleting
+        # every Variable/Component there took unrelated in-progress
+        # optimize state with it. AUTHOR (below) already deletes exactly
+        # its own fixtures by name/id/route on this site — nothing more
+        # is needed here.
+        "try:\n"
+        "    frappe.init(site='sandbox.localhost'); frappe.connect()\n"
+        "    for n in frappe.get_all('Builder Page',"
+        " filters={'route': 'roundtrip-proof'}, pluck='name'):\n"
+        "        frappe.delete_doc('Builder Page', n, force=True)\n"
+        "    frappe.db.commit(); frappe.destroy()\n"
+        "except Exception:\n"
+        "    pass\n"
+        # roundtrip.localhost: disposable scratch, also used by
+        # publish-verify — a blanket wipe here is safe and prevents a
+        # false "tokens arrived" reading from a previous run's leftovers.
+        f"try:\n"
+        f"    frappe.init(site={second_site!r}); frappe.connect()\n"
+        "    for n in frappe.get_all('Builder Page',"
+        " filters={'route': 'roundtrip-proof'}, pluck='name'):\n"
+        "        frappe.delete_doc('Builder Page', n, force=True)\n"
+        "    for n in frappe.get_all('Builder Variable', pluck='name'):\n"
+        "        frappe.delete_doc('Builder Variable', n, force=True)\n"
+        "    for n in frappe.get_all('Builder Component', pluck='name'):\n"
+        "        frappe.delete_doc('Builder Component', n, force=True)\n"
+        "    frappe.db.commit(); frappe.destroy()\n"
+        "except Exception:\n"
+        "    pass\n"
+    )
+
+
 def run(script: str, marker: str) -> dict:
     completed = subprocess.run(
         [*COMPOSE, "exec", "-T", "bench", "bash", "-lc",
@@ -153,6 +195,28 @@ def run(script: str, marker: str) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from buildsmith.workflows.optimize import gates
+
+    # #20: this check's clean-slate step used to wipe every Builder Variable
+    # and Component on sandbox.localhost, taking any in-progress optimize
+    # state with it while the gate ledger still called it applied+proved.
+    # The wipe below is now scoped off sandbox.localhost entirely (see the
+    # clean-slate step), but refuse loudly first anyway — the same guard
+    # `optimize baseline` uses before it would absorb an unproven state.
+    open_ledgers = gates.any_pending()
+    if open_ledgers:
+        names = ", ".join(
+            f"{site} ({gates.transform_names(entries)})"
+            for site, entries in sorted(open_ledgers.items())
+        )
+        raise SystemExit(
+            f"the shared sandbox has applied transform(s) with no passing "
+            f"oracle: {names}. check_roundtrip mutates that sandbox and "
+            "could collide with unproved state. Run `buildsmith optimize "
+            "oracle` first, or `buildsmith optimize status` to see what's "
+            "pending."
+        )
+
     running = subprocess.run([*COMPOSE, "ps", "--status", "running", "--services"],
                              capture_output=True, text=True)
     if "bench" not in running.stdout.split():
@@ -189,26 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     subprocess.run(
         [*COMPOSE, "exec", "-T", "bench", "bash", "-lc",
          "cd /home/frappe/frappe-bench/sites && /home/frappe/frappe-bench/env/bin/python - "],
-        input=(
-            "import frappe\n"
-            f"for site in ['sandbox.localhost', '{SECOND_SITE}']:\n"
-            "    try:\n"
-            "        frappe.init(site=site); frappe.connect()\n"
-            "        for n in frappe.get_all('Builder Page',"
-            " filters={'route': 'roundtrip-proof'}, pluck='name'):\n"
-            "            frappe.delete_doc('Builder Page', n, force=True)\n"
-            # Other runs put variables on the scratch site — publish-verify
-            # does exactly that. Leaving them makes "tokens arrived" true for
-            # the wrong reason, which nearly produced a false "upstream fixed
-            # it" conclusion. Start from none.
-            "        for n in frappe.get_all('Builder Variable', pluck='name'):\n"
-            "            frappe.delete_doc('Builder Variable', n, force=True)\n"
-            "        for n in frappe.get_all('Builder Component', pluck='name'):\n"
-            "            frappe.delete_doc('Builder Component', n, force=True)\n"
-            "        frappe.db.commit(); frappe.destroy()\n"
-            "    except Exception:\n"
-            "        pass\n"
-        ),
+        input=_clean_slate_script(),
         text=True, capture_output=True,
     )
 
