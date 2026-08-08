@@ -55,5 +55,48 @@ class DraftBlocksCaptureTest(unittest.TestCase):
         self.assertEqual(out["pages"][0]["draft_blocks"], [])
 
 
+def _minimal_state(**page_overrides) -> dict:
+    page = {
+        "route": "/x", "page_title": "X", "blocks": [], "head_html": "",
+        "draft_blocks": [],
+    }
+    page.update(page_overrides)
+    return {"pages": [page], "components": [], "tokens": {}}
+
+
+class ContentHashSeesDraftBlocksTest(unittest.TestCase):
+    """A drift check that can't see a draft edit isn't checking what matters."""
+
+    def test_a_draft_only_change_changes_the_hash(self):
+        clean = _minimal_state()
+        edited = _minimal_state(draft_blocks=[{"blockId": "new-shell"}])
+        self.assertNotEqual(
+            capture_dev._content_hash(clean), capture_dev._content_hash(edited))
+
+    def test_an_unchanged_draft_does_not_change_the_hash(self):
+        a = _minimal_state(draft_blocks=[{"blockId": "same"}])
+        b = _minimal_state(draft_blocks=[{"blockId": "same"}])
+        self.assertEqual(capture_dev._content_hash(a), capture_dev._content_hash(b))
+
+    def test_a_missing_draft_blocks_key_does_not_crash(self):
+        state = _minimal_state()
+        del state["pages"][0]["draft_blocks"]
+        capture_dev._content_hash(state)  # must not raise
+
+
+class PublishVerifyDraftBlocksTest(unittest.TestCase):
+    """publish_verify's rehearsal must serialize draft_blocks like blocks —
+    Frappe stores the column as JSON text, not a Python list (#26 review)."""
+
+    def test_apply_script_serializes_draft_blocks_not_forwards_it_raw(self):
+        from buildsmith.tools import publish_verify
+
+        self.assertIn('payload["draft_blocks"] = json.dumps', publish_verify.APPLY)
+        # excluded from the blanket copy-through so the explicit json.dumps
+        # line above is the only place it's set — a raw list slipping
+        # through the blanket copy would insert the wrong type (#26 review).
+        self.assertIn('"name", "blocks", "draft_blocks"', publish_verify.APPLY)
+
+
 if __name__ == "__main__":
     unittest.main()

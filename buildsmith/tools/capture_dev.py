@@ -91,7 +91,11 @@ def _content_hash(state: dict) -> str:
     material = {
         "pages": sorted(
             (p["route"], p["page_title"], json.dumps(p["blocks"], sort_keys=True),
-             p.get("head_html", ""))
+             p.get("head_html", ""),
+             # An unpublished draft is still damage waiting to be published
+             # (simulate.pages_using checks it explicitly) — a drift check
+             # that can't see a draft edit isn't checking what matters.
+             json.dumps(p.get("draft_blocks") or [], sort_keys=True))
             for p in state["pages"]
         ),
         "components": sorted(

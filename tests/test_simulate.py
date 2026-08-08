@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from buildsmith.errors import CouldNotCheck
 from buildsmith.tools import simulate as simulate_mod
 
 simulate = simulate_mod.simulate
@@ -175,7 +176,7 @@ class StateLoading(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "state.json"
             path.write_text(json.dumps({"components": {}}))
-            with self.assertRaises(ValueError) as caught:
+            with self.assertRaises(CouldNotCheck) as caught:
                 load_state(path)
         self.assertIn("vacuous", str(caught.exception))
 
@@ -233,7 +234,7 @@ class LoadingACaptureDevDirectory(unittest.TestCase):
             root = Path(d) / "not-a-capture"
             root.mkdir()
             (root / "manifest.json").write_text("{}")
-            with self.assertRaises(ValueError) as caught:
+            with self.assertRaises(CouldNotCheck) as caught:
                 load_state(root)
         self.assertIn("pages/", str(caught.exception))
 

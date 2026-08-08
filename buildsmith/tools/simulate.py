@@ -45,6 +45,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from buildsmith.errors import CouldNotCheck
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 __all__ = [
@@ -368,7 +370,7 @@ def load_state(path: str | Path) -> dict:
         return _load_state_dir(path)
     state = json.loads(path.read_text())
     if "pages" not in state:
-        raise ValueError(
+        raise CouldNotCheck(
             f"{path}: a state export needs a 'pages' list. Without the pages there is "
             "nothing to simulate against, and an empty simulation passes vacuously."
         )
@@ -385,7 +387,7 @@ def _load_state_dir(directory: Path) -> dict:
     """
     pages_dir = directory / "pages"
     if not pages_dir.is_dir():
-        raise ValueError(
+        raise CouldNotCheck(
             f"{directory}: no pages/ subdirectory. capture_dev writes "
             "dev-state/pages/*.json — a directory without one is not a capture."
         )
