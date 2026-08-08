@@ -7,8 +7,13 @@ sites/*
 sites/*/build/
 
 # Python
+# Trailing-slash patterns match only a directory — a symlink named .venv
+# (a real one slipped past both patterns and reached main, #37) needs the
+# bare form too.
 .venv/
+.venv
 venv/
+venv
 __pycache__/
 *.py[cod]
 *.egg-info/
