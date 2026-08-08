@@ -144,6 +144,88 @@ class NothingVanishesSilently(unittest.TestCase):
         self.assertEqual(texts(result.blocks), ["B"])
 
 
+class InlineSvgIsOpaqueContent(unittest.TestCase):
+    """#15: an <svg>'s attributes ARE its content, not styling metadata —
+    the HTML attribute allowlist that correctly filters a <div> would strip
+    every one of them and leave a <use> skeleton that paints nothing."""
+
+    SPRITE = (
+        '<body><svg style="display:none"><symbol id="icon-x" viewBox="0 0 24 24">'
+        '<path d="M0 0L24 24" fill="currentColor"></path>'
+        "</symbol></svg>"
+        '<svg class="icon"><use href="#icon-x"></use></svg></body>'
+    )
+
+    def test_svg_becomes_one_block_not_a_walked_subtree(self):
+        result = html_to_blocks(self.SPRITE)
+        # Two top-level <svg>s at body level; neither has real children in
+        # the block tree — each is one opaque leaf.
+        svgs = [b for b in result.blocks if "<svg" in b.get("innerHTML", "")]
+        self.assertEqual(len(svgs), 2)
+        for block in svgs:
+            self.assertNotIn("children", block)
+
+    def test_content_attributes_survive_verbatim(self):
+        # Before the fix: viewBox/d/fill all failed KEPT_ATTRIBUTES and were
+        # dropped as "not content" — this is the exact 312x/210x from #15.
+        result = html_to_blocks(self.SPRITE)
+        sprite_block = result.blocks[0]
+        self.assertIn('viewbox="0 0 24 24"', sprite_block["innerHTML"])
+        self.assertIn('d="M0 0L24 24"', sprite_block["innerHTML"])
+        self.assertIn('fill="currentColor"', sprite_block["innerHTML"])
+        self.assertIn("<symbol", sprite_block["innerHTML"])
+        self.assertIn("<path", sprite_block["innerHTML"])
+
+    def test_the_use_reference_survives_alongside_the_definition(self):
+        result = html_to_blocks(self.SPRITE)
+        use_block = result.blocks[1]
+        self.assertIn('href="#icon-x"', use_block["innerHTML"])
+
+    def test_nothing_from_the_svg_is_reported_as_dropped(self):
+        result = html_to_blocks(self.SPRITE)
+        self.assertEqual(
+            [d for d in result.dropped if "svg" in d or "viewbox" in d or "path" in d], []
+        )
+
+    def test_svg_captured_is_counted(self):
+        result = html_to_blocks(self.SPRITE)
+        self.assertEqual(result.svg_captured, 2)
+        self.assertEqual(result.counts["svg_captured"], 2)
+
+    def test_a_self_closing_use_tag_is_handled(self):
+        # Real markup mixes both styles; a self-closing <use/> goes through
+        # HTMLParser's default handle_startendtag (starttag then endtag).
+        result = html_to_blocks('<body><svg><use href="#icon-x"/></svg></body>')
+        self.assertIn('href="#icon-x"', result.blocks[0]["innerHTML"])
+        self.assertIn("</use>", result.blocks[0]["innerHTML"])
+
+    def test_text_inside_svg_is_escaped_not_dropped(self):
+        result = html_to_blocks(
+            '<body><svg><text>1 &lt; 2 &amp; 3</text></svg></body>'
+        )
+        self.assertIn("1 &lt; 2 &amp; 3", result.blocks[0]["innerHTML"])
+
+    def test_an_svg_inside_a_template_stays_inert(self):
+        # A sprite sitting inside a JS-only <template> is not live page
+        # content — it must stay dropped like everything else in <template>,
+        # not get pulled out as if #15's fix applied to it.
+        result = html_to_blocks(
+            '<body><template><svg><path d="M0 0"></path></svg></template>'
+            "<p>Real</p></body>"
+        )
+        self.assertEqual(texts(result.blocks), ["Real"])
+        self.assertEqual(result.svg_captured, 0)
+
+    def test_a_top_level_icon_svg_is_captured_the_same_way_as_a_sprite(self):
+        # Not just sprite-sheet definitions — an ordinary standalone icon
+        # <svg> used directly gets the same opaque treatment.
+        result = html_to_blocks(
+            '<body><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="8"></circle></svg></body>'
+        )
+        self.assertIn('cx="8"', result.blocks[0]["innerHTML"])
+        self.assertNotIn("children", result.blocks[0])
+
+
 class Crawling(unittest.TestCase):
     def _site(self, d):
         root = Path(d)

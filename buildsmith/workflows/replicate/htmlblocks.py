@@ -37,6 +37,7 @@ Zero dependencies — stdlib `html.parser`, so this runs anywhere.
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -146,6 +147,9 @@ class ConversionResult:
     #: Page-local scripts worth carrying. External and analytics-shaped scripts
     #: are excluded — see `_worth_carrying`.
     scripts: list[str] = field(default_factory=list)
+    #: <svg> subtrees carried verbatim as opaque innerHTML blocks (#15) —
+    #: sprite-sheet definitions and inline icons alike.
+    svg_captured: int = 0
 
     @property
     def counts(self) -> dict[str, int]:
@@ -157,6 +161,7 @@ class ConversionResult:
             "styles_recovered": self.styles_recovered,
             "leftover_css_chars": len(self.leftover_css),
             "scripts_carried": len(self.scripts),
+            "svg_captured": self.svg_captured,
         }
 
 
@@ -172,6 +177,16 @@ class _Builder(HTMLParser):
         self._skipping: str | None = None
         self._capturing_style = False
         self._capturing_script = False
+        #: An <svg> subtree is foreign-namespace content: its attributes
+        #: (`d`, `viewBox`, `points`, `cx`/`cy`/`r`, …) ARE the drawing, not
+        #: styling metadata, so KEPT_ATTRIBUTES — built for HTML — would
+        #: strip every one of them and leave a paint-nothing <use> skeleton
+        #: (#15). Rebuilt verbatim from parser events into one opaque block
+        #: instead of walked like ordinary HTML.
+        self._capturing_svg = False
+        self._svg_depth = 0
+        self._svg_buffer: list[str] = []
+        self.svg_count = 0
         self.stylesheet: list[str] = []
         #: hrefs of <link rel="stylesheet">, in document order. The sheets
         #: themselves live in the crawl; html_to_blocks resolves them through
@@ -179,11 +194,40 @@ class _Builder(HTMLParser):
         self.linked_stylesheets: list[str] = []
         self.scripts: list[str] = []
 
+    @staticmethod
+    def _render_starttag(tag: str, attrs: list[tuple[str, str | None]]) -> str:
+        """Reconstruct `<tag attr="val" …>` from parsed events.
+
+        Rebuilding from what the parser already extracted, rather than
+        slicing raw source, sidesteps `HTMLParser`'s offset bookkeeping —
+        and it's the same "build from callbacks" style everything else in
+        this class already uses.
+        """
+        parts = [tag]
+        for name, value in attrs:
+            parts.append(name if value is None else f'{name}="{html.escape(value, quote=True)}"')
+        return f"<{' '.join(parts)}>"
+
     # -- elements ---------------------------------------------------------
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if self._skipping:
+            # An <svg> inside <template>/<noscript> is still inert content —
+            # this check has to run BEFORE svg-capture starts, or an icon
+            # sprite sitting inside a JS-only template would get pulled out
+            # as if it were live page content.
             if tag == self._skipping:
                 self._skip_depth += 1
+            return
+
+        if self._capturing_svg:
+            self._svg_buffer.append(self._render_starttag(tag, attrs))
+            self._svg_depth += 1
+            return
+
+        if tag == "svg":
+            self._capturing_svg = True
+            self._svg_depth = 1
+            self._svg_buffer = [self._render_starttag(tag, attrs)]
             return
 
         if tag in SKIPPED_ELEMENTS:
@@ -260,6 +304,24 @@ class _Builder(HTMLParser):
                     self._capturing_style = False
                     self._capturing_script = False
             return
+        if self._capturing_svg:
+            self._svg_buffer.append(f"</{tag}>")
+            self._svg_depth -= 1
+            if self._svg_depth <= 0:
+                self._capturing_svg = False
+                markup = "".join(self._svg_buffer)
+                self._svg_buffer = []
+                self.svg_count += 1
+                self.element_count += 1
+                # A div wrapper, not element="svg": innerHTML is set through
+                # a real DOM API, which parses embedded foreign-namespace
+                # markup correctly regardless of the parent tag — no need
+                # for Builder's block schema to know "svg" as an element
+                # type. Not pushed onto self.stack: it's a leaf, opaque.
+                self.stack[-1].setdefault("children", []).append(
+                    {"element": "div", "innerHTML": markup}
+                )
+            return
         if tag in VOID_ELEMENTS or tag in SKIPPED_ELEMENTS:
             return
         # Unbalanced markup is the norm in the wild. Unwind to the nearest
@@ -278,6 +340,9 @@ class _Builder(HTMLParser):
             self.scripts.append(data)
             return
         if self._skipping:
+            return
+        if self._capturing_svg:
+            self._svg_buffer.append(html.escape(data))
             return
         text = data.strip()
         if not text:
@@ -298,6 +363,9 @@ class _Builder(HTMLParser):
         )
 
     def handle_comment(self, data: str) -> None:
+        if self._capturing_svg:
+            self._svg_buffer.append(f"<!--{data}-->")
+            return
         if data.strip():
             self.dropped.append("HTML comment dropped")
 
@@ -525,6 +593,7 @@ def html_to_blocks(html: str, *, keep_body_only: bool = True,
         leftover_css="\n".join(leftover),
         title=title,
         scripts=carried,
+        svg_captured=parser.svg_count,
     )
 
     if not blocks and html.strip():
