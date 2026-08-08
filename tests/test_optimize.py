@@ -775,6 +775,41 @@ class RefuseStaleCheckpoint(unittest.TestCase):
         self.assertIn("optimize oracle", message)
         self.assertIn("do NOT re-baseline yet", message)
 
+    def test_the_force_advice_is_conditioned_on_the_oracle_verdict(self):
+        # Review on #18: the first draft told the operator to run
+        # `baseline --force` unconditionally, even in the branch where the
+        # oracle it just told them to run had failed — the two halves of
+        # the same paragraph contradicted each other. And it called --force
+        # required when a passing oracle already clears the gate on its
+        # own (gates.record_oracle), so the happy path never needs it.
+        self._write_manifest("acme", "aaa111aaa111")
+        capture_dev.read_state = lambda target: {"sentinel": True}
+        capture_dev._content_hash = lambda state: "bbb222bbb222"
+
+        with self.assertRaises(SystemExit) as cm:
+            tokenize._refuse_stale_checkpoint("acme")
+        message = str(cm.exception)
+        self.assertIn("If it passes", message)
+        self.assertIn("no --force", message)
+        self.assertIn("If it fails", message)
+
+    def test_a_dry_run_does_not_get_the_apply_time_recovery_advice(self):
+        # advise_recovery=False (collapse.py's dry-run path): the
+        # interrupted-apply/re-apply paragraph assumes an apply refusal and
+        # reads as nonsense in a warning that never refused anything —
+        # and folding a multi-paragraph message into one `WARNING: {exc}`
+        # line would garble it regardless (#18 review).
+        self._write_manifest("acme", "aaa111aaa111")
+        capture_dev.read_state = lambda target: {"sentinel": True}
+        capture_dev._content_hash = lambda state: "bbb222bbb222"
+
+        with self.assertRaises(SystemExit) as cm:
+            tokenize._refuse_stale_checkpoint("acme", advise_recovery=False)
+        message = str(cm.exception)
+        self.assertIn("REFUSED", message)
+        self.assertNotIn("interrupted", message)
+        self.assertNotIn("\n\n", message)
+
     def test_missing_manifest_raises_mentioning_baseline(self):
         # No manifest.json written at all for this site.
         with self.assertRaises(SystemExit) as cm:

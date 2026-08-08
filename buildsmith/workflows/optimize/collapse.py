@@ -173,9 +173,12 @@ def run(site: str, *, target: str = "sandbox.localhost",
         _refuse_stale_checkpoint(site, target=target)
     else:
         # a dry run against a stale checkpoint reports wrappers that may no
-        # longer exist — warn rather than refuse, so it still works offline
+        # longer exist — warn rather than refuse, so it still works offline.
+        # advise_recovery=False: the interrupted-apply/re-apply advice
+        # assumes an apply refusal, and folding it into one warning line
+        # would garble it anyway (#18 review).
         try:
-            _refuse_stale_checkpoint(site, target=target)
+            _refuse_stale_checkpoint(site, target=target, advise_recovery=False)
         except SystemExit as exc:
             warnings.append(f"checkpoint freshness not verified: {exc}")
     pages, components = load_state(site)

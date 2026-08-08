@@ -420,8 +420,13 @@ print('applied', len(json.loads({json.dumps(json.dumps(payload))})))
     }
 
 
-def _refuse_stale_checkpoint(site: str, *,
-                             target: str = "sandbox.localhost") -> None:
+def _refuse_stale_checkpoint(site: str, *, target: str = "sandbox.localhost",
+                             advise_recovery: bool = True) -> None:
+    """`advise_recovery=False` for a dry-run's caught-and-warned use (#18
+    review): the interrupted-apply paragraph below talks about re-applying,
+    which reads as nonsense in a warning that never refuses anything, and
+    its multiple paragraphs break a caller that folds the message into one
+    `WARNING: {exc}` line (collapse.py's dry-run path)."""
     from buildsmith.tools import capture_dev
 
     manifest_path = (ROOT / "sites" / site / "opt" / "baseline" / "state"
@@ -432,19 +437,26 @@ def _refuse_stale_checkpoint(site: str, *,
     recorded = json.loads(manifest_path.read_text())["content_hash"]
     current = capture_dev._content_hash(capture_dev.read_state(target))
     if current != recorded:
-        raise SystemExit(
+        message = (
             "REFUSED: the sandbox has changed since the baseline checkpoint "
             f"(hash {recorded[:12]} -> {current[:12]}). Re-run `buildsmith "
             "optimize baseline` so the rewrite sources current trees — "
-            "applying from a stale checkpoint would overwrite the change.\n\n"
-            "If this drift is from an apply that got interrupted (killed "
-            "mid-run, crashed): do NOT re-baseline yet — that would bless a "
-            "possibly-broken half-apply as the new reference forever. Run "
-            "`buildsmith optimize oracle` first, against the CURRENT "
-            "checkpoint, to prove the sandbox still renders like it did "
-            "before the interruption (or catch that it does not). Only "
-            "then `buildsmith optimize baseline --force` (waives the "
-            "pending gate entry, recorded in the ledger) and re-apply.")
+            "applying from a stale checkpoint would overwrite the change."
+        )
+        if advise_recovery:
+            message += (
+                "\n\nIf this drift is from an apply that got interrupted "
+                "(killed mid-run, crashed): do NOT re-baseline yet — that "
+                "could bless a possibly-broken half-apply as the new "
+                "reference forever. Run `buildsmith optimize oracle` first, "
+                "against the CURRENT checkpoint. If it passes, the pending "
+                "gate entry clears itself and a plain `buildsmith optimize "
+                "baseline` (no --force) is safe to re-run. If it fails — or "
+                "you skip it — `buildsmith optimize baseline --force` "
+                "waives the still-pending entry; only do that once you have "
+                "judged the half-apply's damage yourself."
+            )
+        raise SystemExit(message)
 
 
 def check_resolution(clone_url: str, uuids: list[str],
