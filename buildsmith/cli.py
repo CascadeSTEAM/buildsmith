@@ -379,7 +379,7 @@ def cmd_optimize(args: argparse.Namespace) -> int:
         route_summary = (f"baseline captured: {len(manifest['routes_captured'])} routes"
                         f" x {len(manifest['viewports'])} viewports")
         scripts_scanned = manifest["scripts_scanned"]
-        if isinstance(scripts_scanned, str):
+        if baseline_mod.scripts_unscanned(scripts_scanned):
             # "UNSCANNED — ..." already reads as a complete sentence;
             # appending "scripts scanned" produced two fragments jammed
             # together with no punctuation between them (#17).

@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 
 from buildsmith.errors import CouldNotCheck
+from buildsmith.workflows.optimize import baseline as baseline_mod
 from buildsmith.workflows.optimize import gates
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -147,7 +148,7 @@ def render(data: dict) -> str:
                if baseline["routes_skipped"] else "")
             + f"  builder {baseline['builder_ref']}"
         )
-        if isinstance(baseline["scripts_scanned"], str):
+        if baseline_mod.scripts_unscanned(baseline["scripts_scanned"]):
             # the manifest's own loud UNSCANNED marker — pass it through
             lines.append(f"           scripts: {baseline['scripts_scanned']}")
 
