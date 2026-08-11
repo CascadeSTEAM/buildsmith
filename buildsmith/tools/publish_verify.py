@@ -177,14 +177,28 @@ def rehearse(site: str) -> int:
                     f"http://127.0.0.1:8000/{route}"]).stdout
         scratch = _run(["curl", "-s", "--max-time", "25", "-H", f"Host: {SCRATCH}",
                         f"http://127.0.0.1:8000/{route}"]).stdout
-        missing_sel = sorted(set(cd._rules(dev)) - set(cd._rules(scratch)))
+        # Selector comparison goes through clone_diff's bundle logic, NOT a raw
+        # set difference of selector names: Builder re-mints every `.fb-<hash>`
+        # class per site, so the same styles always wear different names on the
+        # rehearsal, and comparing names reported 71 missing selectors on a page
+        # that was identical to dev. compare_rules says what these rules *say*.
+        rule_diff = cd.compare_rules(cd._rules(dev), cd._rules(scratch))
         missing_txt = sorted(t for t in cd._text(dev) - cd._text(scratch) if len(t) > 2)
         missing_ast = sorted(cd._assets(dev) - cd._assets(scratch))
         missing_scr = sorted(cd._scripts(dev) - cd._scripts(scratch))
 
         problems = []
-        for label, items in (("selectors", missing_sel), ("text", missing_txt),
-                             ("assets", missing_ast), ("scripts", missing_scr)):
+        if rule_diff.missing_selectors:
+            problems.append(f"{len(rule_diff.missing_selectors)} selectors")
+        if rule_diff.changed_selectors:
+            problems.append(
+                f"{sum(len(v) for v in rule_diff.changed_selectors.values())} "
+                "declarations inside existing selectors"
+            )
+        if rule_diff.generated_missing:
+            problems.append(f"{rule_diff.generated_missing} generated rules")
+        for label, items in (("text", missing_txt), ("assets", missing_ast),
+                             ("scripts", missing_scr)):
             if items:
                 problems.append(f"{len(items)} {label}")
         if problems:
@@ -192,8 +206,23 @@ def rehearse(site: str) -> int:
             print(f"   FAIL /{route}: rehearsal is missing {', '.join(problems)}")
             for item in (missing_txt + missing_ast)[:4]:
                 print(f"          {item[:90]}")
+            for selector in rule_diff.missing_selectors[:4]:
+                print(f"          selector: {selector[:90]}")
+            for (_context, missing, _extra), count in sorted(
+                rule_diff.generated_omitted.items(), key=lambda kv: -kv[1]
+            )[:2]:
+                print(f"          {count}× generated rule missing: "
+                      + ", ".join(missing)[:90])
         else:
-            print(f"   PASS /{route}: identical to dev")
+            notes = []
+            if rule_diff.font_stacks_reduced:
+                notes.append(f"font stacks reduced: {rule_diff.font_stacks_reduced}")
+            if rule_diff.generated_covered:
+                notes.append(
+                    f"covered-with-additions: {sum(rule_diff.generated_covered.values())}"
+                )
+            suffix = f" ({'; '.join(notes)})" if notes else ""
+            print(f"   PASS /{route}: identical to dev{suffix}")
 
     print("\n3. browser check against the feature inventory\n")
     unchecked = False

@@ -7,6 +7,15 @@ and only the steps that this site actually needs — a site with no shipped
 template group is not told to enable developer_mode, so the steps that *are*
 listed keep their weight.
 
+Both workflows produce a plan, from their own source of truth:
+
+- a **theme** site (W2) is recomputed from `design/`, so a plan can never
+  drift from the design inputs — but note it describes the *current* design,
+  which is why the plan is regenerated rather than edited;
+- a **replicate** site (W1) has no design inputs to recompute from, so its
+  plan is generated from the emitted `build/` payloads themselves — the files
+  that would actually ship. Validated first, same as handoff.
+
 Every live step is marked with who performs it. Buildsmith emits artifacts; the
 operations project performs actions (ADR-002), and a plan that blurs that is how
 someone ends up running a DNS change from a design repo.
@@ -20,16 +29,21 @@ Nothing here touches a site.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
+from buildsmith.errors import EXIT_OK
 from buildsmith.primitives.template import (
+    Page,
     check_routes,
     prerequisites,
     requires_developer_mode,
     side_effects,
 )
-from buildsmith.workflows.theme import build_site
+from buildsmith.tools import validate
+from buildsmith.workflows.theme import BuildResult, build_site
+from buildsmith.workflows.theme.build import BuildError
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,10 +53,96 @@ OPS = "**operations project**"
 HERE = "buildsmith"
 
 
+def _workflow_for(site_dir: Path) -> str:
+    """Which workflow built this site — the `workflow:` field of site.yml.
+
+    Older sites without the field are inferred from what is on disk: a build
+    directory with no design directory is a replicate by construction.
+    """
+    site_yml = site_dir / "site.yml"
+    if site_yml.is_file():
+        for line in site_yml.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("workflow:"):
+                return line.split(":", 1)[1].strip().strip("'\"")
+    if (site_dir / "build" / "pages").is_dir() and not (site_dir / "design").is_dir():
+        return "replicate"
+    return "theme"
+
+
+def _page_from_record(record: dict) -> Page:
+    """Rebuild the `Page` a `build/pages/*.json` payload came from.
+
+    The emitted record is `Page.record()` plus `_client_scripts`, so every
+    field maps back exactly. The name Builder assigned is not in a W1 payload
+    (and cannot be predicted, TRAP-012), which is fine — the plan needs no name.
+    """
+    return Page(
+        title=record.get("page_title") or record.get("route") or "untitled",
+        route=record.get("route") or "",
+        blocks=record.get("blocks") or [],
+        template_group=record.get("template_group"),
+        is_template=bool(record.get("is_template")),
+        dynamic_route=bool(record.get("dynamic_route")),
+        published=bool(record.get("published")),
+        project_folder=record.get("project_folder"),
+        favicon=record.get("favicon"),
+        head_html=record.get("head_html") or "",
+        scripts=record.get("_client_scripts") or [],
+    )
+
+
+def _result_from_build(site_dir: Path, *, site: str) -> BuildResult:
+    """Reconstruct the build surface from emitted payloads — the W1 path.
+
+    A replicate site has no `design/` to recompute from, and the emitted
+    `build/` directory IS what would ship, so the plan is generated from the
+    payloads themselves rather than from anything that could drift from them.
+    """
+    build = site_dir / "build"
+    pages_dir = build / "pages"
+    if not pages_dir.is_dir():
+        raise BuildError(
+            f"{build}/pages does not exist. This site has no emitted build; clone "
+            f"or build it (buildsmith clone/build --site {site}) before planning a "
+            "go-live."
+        )
+
+    # Same gate as handoff: never write a plan for payloads nobody checked.
+    if validate.main(["--dir", str(build)]) != EXIT_OK:
+        raise BuildError(
+            f"the build payloads in {build} do not validate. A go-live plan must "
+            "describe what actually ships, and unvalidated payloads are not "
+            "allowed to ship (buildsmith validate)."
+        )
+
+    pages = [
+        _page_from_record(json.loads(path.read_text()))
+        for path in sorted(pages_dir.glob("*.json"))
+    ]
+    template = next((p for p in pages if p.is_template), None)
+    ordinary = [p for p in pages if not p.is_template]
+    return BuildResult(
+        site=site,
+        token_plan=None,
+        components=[],
+        template=template,
+        pages=ordinary,
+    )
+
+
 def generate(site: str, *, root: Path | None = None) -> str:
     base = root or ROOT
-    result = build_site(base / "sites" / site, site=site)
+    site_dir = base / "sites" / site
+    workflow = _workflow_for(site_dir)
+    if workflow == "replicate":
+        result = _result_from_build(site_dir, site=site)
+    else:
+        result = build_site(site_dir, site=site)
+    return _render(result, site, workflow)
 
+
+def _render(result: BuildResult, site: str, workflow: str) -> str:
     pages = ([result.template] if result.template else []) + result.pages
     shipped = [p for p in pages if requires_developer_mode(p)]
     route_notes = check_routes(pages)
@@ -61,6 +161,7 @@ def generate(site: str, *, root: Path | None = None) -> str:
         "|---|---|",
     ]
     out += [f"| {k.replace('_', ' ')} | {v} |" for k, v in sorted(result.counts.items())]
+    out.append(f"| workflow | {workflow} |")
     out.append("")
 
     if result.warnings:
@@ -105,7 +206,15 @@ def generate(site: str, *, root: Path | None = None) -> str:
             "",
         ]
     else:
-        out += ["Nothing to do — the site's tokens already match the manifest.", ""]
+        if workflow == "replicate":
+            out += [
+                "Nothing to do — a W1 replica keeps its colours inline in block",
+                "styles, not as Builder tokens. Tokenize it later with the W2 pass",
+                "if you want tokens.",
+                "",
+            ]
+        else:
+            out += ["Nothing to do — the site's tokens already match the manifest.", ""]
 
     out += ["## Components", ""]
     if result.components:
