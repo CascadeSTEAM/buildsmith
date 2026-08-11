@@ -6,6 +6,14 @@ intended to be **published publicly**, so it must stay free of client-identifyin
 information.
 
 ## START HERE, every session
+0. **Sync from origin before anything else.** Run `git fetch --all --prune`.
+   If the working tree is on `main`, `git pull` (fast-forward only — this repo
+   has one maintainer and no one else pushes to `main`, so a non-fast-forward
+   result means something unexpected and should be surfaced, not forced). A
+   worktree session on another branch bases on `origin/main` instead of pulling
+   — never check out `main` to sync it. This applies on every clone: the step
+   lives here, in the tracked file every session reads first, precisely so it
+   travels automatically rather than needing to be set up again per machine.
 1. **`docs/ROADMAP.md`** and **`docs/ISSUES.md`** — the plan and the open items:
    what is done, what is next. (`RESUME.md`, if present, is a gitignored private
    working file — the bootstrap-era narrative; public clones do not have it.)
