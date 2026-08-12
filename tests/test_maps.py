@@ -68,6 +68,31 @@ class OsmEmbedSrc(unittest.TestCase):
         with self.assertRaises(EmbedError):
             osm_embed_src(0.0, 0.0, span=-0.01)
 
+    def test_bbox_is_clamped_near_a_pole(self):
+        # A valid centre point (89.999) whose span-expanded bbox would
+        # otherwise land at lat=90.005 — past the valid range, not just
+        # off-centre. Real places sit this close to a pole (Ross Island).
+        url = osm_embed_src(89.999, 0.0, span=0.01)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        min_lon, min_lat, max_lon, max_lat = (float(v) for v in query["bbox"][0].split(","))
+        self.assertLessEqual(max_lat, 90.0)
+        self.assertGreaterEqual(min_lat, -90.0)
+
+    def test_bbox_is_clamped_near_the_antimeridian(self):
+        # Same shape of bug on longitude: lon=179.999 with span=0.01 would
+        # otherwise put max_lon at 180.009. Chukotka straddles this line.
+        url = osm_embed_src(0.0, 179.999, span=0.01)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        min_lon, min_lat, max_lon, max_lat = (float(v) for v in query["bbox"][0].split(","))
+        self.assertLessEqual(max_lon, 180.0)
+        self.assertGreaterEqual(min_lon, -180.0)
+
+        url = osm_embed_src(0.0, -179.999, span=0.01)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        min_lon, min_lat, max_lon, max_lat = (float(v) for v in query["bbox"][0].split(","))
+        self.assertLessEqual(max_lon, 180.0)
+        self.assertGreaterEqual(min_lon, -180.0)
+
 
 class GoogleEmbedSrc(unittest.TestCase):
     def test_address_is_the_query_and_output_is_embed(self):

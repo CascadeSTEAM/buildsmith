@@ -61,6 +61,13 @@ def osm_embed_src(lat: float, lon: float, *, span: float = DEFAULT_SPAN) -> str:
 
     `layer=mapnik` is the default tile layer; `marker` drops the pin the panel
     always includes when a location (rather than just a view) was shared.
+
+    The bbox is clamped to OSM's valid range after `span` is applied, not just
+    the centre point: a marker within `span` of a pole, or of the antimeridian,
+    would otherwise expand into a bbox edge past ±90/±180 — invalid, not just
+    off-centre. Real places sit this close to both (Chukotka straddles the
+    antimeridian; Ross Island is inside the Antarctic Circle), so this is not a
+    hypothetical input, only an unlikely one.
     """
     if not -90 <= lat <= 90:
         raise EmbedError(f"lat must be between -90 and 90, got {lat!r}")
@@ -69,8 +76,13 @@ def osm_embed_src(lat: float, lon: float, *, span: float = DEFAULT_SPAN) -> str:
     if span <= 0:
         raise EmbedError(f"span must be positive, got {span!r}")
 
+    min_lat = max(-90.0, lat - span)
+    max_lat = min(90.0, lat + span)
+    min_lon = max(-180.0, lon - span)
+    max_lon = min(180.0, lon + span)
+
     params = {
-        "bbox": f"{lon - span},{lat - span},{lon + span},{lat + span}",
+        "bbox": f"{min_lon},{min_lat},{max_lon},{max_lat}",
         "layer": "mapnik",
         "marker": f"{lat},{lon}",
     }
