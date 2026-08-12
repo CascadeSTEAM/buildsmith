@@ -39,6 +39,13 @@ BASE_URL = "http://127.0.0.1:8000"
 CHECK_COMPONENT_ID = "check-trap-019-map"
 CHECK_ROUTE = "check-trap-019"
 
+#: The only sites this check will ever write to. Mirrors `load_dev.py`'s
+#: `LOCAL_ONLY` guard (ADR-002) for the same class of write, with no override
+#: — this is the first mutation-capable code path `check_traps.py` has grown,
+#: and a config mistake handing it a real site name must fail loudly, not
+#: quietly insert a throwaway component into someone's actual data.
+LOCAL_ONLY = ("sandbox.localhost", "roundtrip.localhost")
+
 __all__ = ["main"]
 
 #: Deliberately literal, not `@map-*` sigils: this check proves the *sandbox*
@@ -130,6 +137,12 @@ def _check_editor_renders_map(site: str) -> bool:
     this can run against a sandbox someone is also using by hand without
     colliding with anything real.
     """
+    if site not in LOCAL_ONLY:
+        raise CouldNotCheck(
+            f"refusing to write a check fixture into {site!r} — this check only ever runs "
+            f"against {', '.join(LOCAL_ONLY)} (ADR-002). Check sandbox/pins.env's SITE_NAME."
+        )
+
     if not _server_reachable():
         raise CouldNotCheck(
             f"nothing is answering on {BASE_URL} — the bench container is up but its web "
@@ -137,6 +150,8 @@ def _check_editor_renders_map(site: str) -> bool:
         )
 
     try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
     except ModuleNotFoundError as exc:
         if "playwright" not in str(exc):
@@ -155,35 +170,56 @@ def _check_editor_renders_map(site: str) -> bool:
     instance_root = json.loads(json.dumps(component.block))  # a same-shape copy to shell against
     shell = override_shells(component.block, instance_root, component_id=CHECK_COMPONENT_ID)
 
-    out = run_bench(
-        _SETUP % {
-            "site": site,
-            "route": CHECK_ROUTE,
-            "component_id": CHECK_COMPONENT_ID,
-            "component_json": json.dumps(component.block),
-            "shell_json": json.dumps(shell),
-        }
-    )
-    page_name = next(
-        (line.split("=", 1)[1] for line in out.splitlines() if line.startswith("PAGE_NAME=")),
-        None,
-    )
-    if not page_name:
-        raise CouldNotCheck(f"setup did not report a page name — bench said:\n{out}")
-
+    # From here on, a check fixture may exist in the sandbox regardless of how
+    # this function exits — `_teardown` runs in `finally` starting now, not
+    # after page-name extraction. A `SandboxError` from `run_bench` (a bad
+    # docker-exec, not a scripted refusal) would otherwise skip cleanup and
+    # escape `main()`'s narrower `except CouldNotCheck` as a raw traceback.
     try:
+        out = run_bench(
+            _SETUP % {
+                "site": site,
+                "route": CHECK_ROUTE,
+                "component_id": CHECK_COMPONENT_ID,
+                "component_json": json.dumps(component.block),
+                "shell_json": json.dumps(shell),
+            }
+        )
+        page_name = next(
+            (line.split("=", 1)[1] for line in out.splitlines() if line.startswith("PAGE_NAME=")),
+            None,
+        )
+        if not page_name:
+            raise CouldNotCheck(f"setup did not report a page name — bench said:\n{out}")
+
         with sync_playwright() as pw:
-            browser = pw.chromium.launch()
+            try:
+                browser = pw.chromium.launch()
+            except PlaywrightError as exc:
+                raise CouldNotCheck(
+                    f"chromium would not launch ({exc}). If it was never installed: "
+                    "playwright install chromium"
+                ) from exc
             context = browser.new_context(base_url=BASE_URL)
             pins = load_pins()
-            context.request.post(
+            login = context.request.post(
                 f"{BASE_URL}/api/method/login",
                 form={"usr": "Administrator", "pwd": pins.get("ADMIN_PASSWORD", "admin")},
             )
+            if not login.ok:
+                browser.close()
+                raise CouldNotCheck(
+                    f"login to {BASE_URL} failed ({login.status}) — a page rendering with no "
+                    "iframe would otherwise be indistinguishable from a real TRAP-019 "
+                    "regression."
+                )
             page = context.new_page()
             page.goto(f"{BASE_URL}/builder/page/{page_name}", wait_until="networkidle")
-            page.wait_for_timeout(3000)  # the canvas hydrates after the network settles
-            rendered = page.locator('iframe[src*="openstreetmap.org"]').count() > 0
+            try:
+                page.wait_for_selector('iframe[src*="openstreetmap.org"]', timeout=15000)
+                rendered = True
+            except PlaywrightTimeoutError:
+                rendered = False
             browser.close()
     finally:
         _teardown(site)
@@ -212,6 +248,9 @@ def main(argv: list[str] | None = None) -> int:
         # the bench check already found must keep exit 1: not being able to
         # check *this* trap never outranks having found a different one.
         return 1 if not bench_ok else 2
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure is still "found a problem"
+        print(f"  ????  COULD NOT CHECK — unexpected error: {exc}", file=sys.stderr)
+        return 1
 
     print(f"  {'PASS' if editor_ok else 'FAIL'}  the map's iframe is in the editor's DOM")
     if not editor_ok:
