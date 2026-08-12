@@ -105,6 +105,16 @@ class Page:
     #: Page-local JavaScript, as Builder Client Script bodies. External and
     #: analytics-shaped scripts are never carried.
     scripts: list[str] = field(default_factory=list)
+    #: Server-side Python, sandboxed by Builder's own `safer_exec` — a
+    #: *different*, more restrictive sandbox than a Frappe Server Script's
+    #: (TRAP-020): `frappe.get_list`/`frappe.get_all` do not exist in it, and
+    #: `frappe.db.get_list` is permission-checked against whoever is viewing
+    #: the page — a real visitor is Guest, and Guest cannot read most
+    #: doctypes by default. Runs on every request; whatever it assigns to
+    #: `data` becomes `page_data`, which is what a repeater's
+    #: `dataKey={"comesFrom": "dataScript"}` reads from. Build it with
+    #: `primitives.datapage.list_data_script()` rather than by hand.
+    page_data_script: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
@@ -139,6 +149,8 @@ class Page:
             payload["favicon"] = self.favicon
         if self.head_html:
             payload["head_html"] = self.head_html
+        if self.page_data_script:
+            payload["page_data_script"] = self.page_data_script
         return payload
 
     def update_payload(self) -> dict[str, Any]:
@@ -315,12 +327,17 @@ def page(
     favicon: str | None = None,
     head_html: str = "",
     scripts: list[str] | None = None,
+    page_data_script: str = "",
 ) -> Page:
     """Build an ordinary page.
 
     `template` is required, and is the mechanism behind the no-exceptions rule
     that every site build emits one. It costs a caller nothing to pass and makes
     the omission impossible to reach by accident rather than merely discouraged.
+
+    `page_data_script`, if given, should come from
+    `primitives.datapage.list_data_script()` — see TRAP-020 before writing one
+    by hand.
     """
     if template is None:
         raise TemplateError(
@@ -349,6 +366,7 @@ def page(
         favicon=favicon or template.favicon,
         head_html=head_html,
         scripts=list(scripts or []),
+        page_data_script=page_data_script,
     )
 
 
