@@ -526,6 +526,80 @@ still treats that shape the way the rule assumes.
 
 ---
 
+## ★ TRAP-020 — `page_data_script` uses a *different* sandbox than a Server Script, and `.get_list` 500s every real visitor
+
+**Symptom.** A `Builder Page.page_data_script` that calls `frappe.get_list(...)`
+or `frappe.get_all(...)` — the ordinary Frappe API, and what a Server
+Script's own sandbox exposes — raises `AttributeError: module has no
+attribute 'get_list'`. Forgiving, as these things go: it fails identically
+for whoever is previewing the page and for a real visitor, so it is caught
+immediately, not shipped.
+
+The dangerous version uses `frappe.db.get_list(...)` instead — a real
+function this sandbox *does* expose. It works. It returns the right rows,
+every time the page's author previews it. It also 500s the page for every
+real website visitor, silently, because they are Guest and Guest has no
+read permission on almost any doctype by default.
+
+**Cause.** Builder's `page_data_script` does not run in Frappe's own
+`safe_exec` sandbox (the one a Server Script uses, which does expose
+`frappe.get_list`/`frappe.get_all` directly). It runs in `builder/utils.py`'s
+own, separate, more restrictive `safer_exec`, whose `get_safer_globals()`
+exposes only `frappe.db.get_list` and `frappe.db.get_all` — and only
+`get_all` is special-cased: `safe_get_all` unconditionally sets
+`kwargs["ignore_permissions"] = True` before calling `frappe.db.get_list`
+underneath it. `safe_get_list` (backing `.get_list`) sets no such thing, so
+it runs permission-checked as whoever is viewing the page — Guest, for a
+real visitor, who is logged into nothing.
+
+Confirmed at the pin, both directions, logged in as each user in turn
+(`frappe.set_user(...)` in a bench console, then a real anonymous `curl`
+against the published route with no cookies at all):
+
+| call | as Administrator (previewing) | as a real visitor (Guest) |
+|---|---|---|
+| `frappe.get_list` / `frappe.get_all` | `AttributeError` | `AttributeError` |
+| `frappe.db.get_list` | works | `PermissionError` → page 500s |
+| `frappe.db.get_all` | works | works |
+
+A field name containing `(` is also silently dropped from the query
+(`remove_unsafe_fields`) rather than erroring — a second, smaller way this
+sandbox can quietly return less than the script asked for.
+
+**Rule.** Build a `page_data_script` with `primitives.datapage.
+list_data_script()`, never by hand. It only ever emits `frappe.db.get_all`
+calls, and refuses (loudly, at build time) a field name containing `(` or a
+`target`/`doctype`/filter value that cannot be safely embedded as a Python
+literal. If a page genuinely needs permission-aware, per-visitor filtering
+rather than "public to everyone" — a members-only listing, say — that is a
+different, harder feature this module does not attempt; know that you are
+choosing `.get_list` deliberately and accept the Guest-permission
+consequence, rather than reaching for it because it is the name that sounds
+like the ordinary Frappe API.
+
+**Testable: yes.** `check_traps._check_public_data_script()` builds a
+throwaway doctype with only System Manager permission — the default state,
+deliberately never given Guest read — and two pages against it: one using
+`list_data_script()`'s own output, one a hand-built `.get_list` script
+simulating the exact mistake. A real anonymous `curl` (no cookies) against
+each proves both halves: the fixed script reaches the visitor, the broken
+one 500s them. Trying the broken script too, not just the fixed one, is
+what makes this a check on the *trap* — a fixed-script-only check could pass
+by accident if a future pin ever changed the sandbox's behaviour.
+
+**Also found while building this check, unrelated to the trap itself but
+real:** deleting a custom `DocType` at this pin removed its meta record but
+not its underlying SQL table, so a second run of the same setup collided on
+a duplicate primary key. The check now drops the table explicitly rather
+than trusting deletion to have done so. And recreating a `Builder Page` at
+an already-used route needs the same `bench clear-website-cache && bench
+clear-cache` `load_dev.py` already runs after every load (TRAP-015) — a
+fresh page at a reused route 403'd for a real visitor until this check
+started clearing both caches itself, the same symptom TRAP-015 already
+names, one level up from where that entry found it.
+
+---
+
 ## Adding a trap
 
 1. Append an entry here with symptom, rule, and whether it is testable.

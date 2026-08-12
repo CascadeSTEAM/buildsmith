@@ -240,6 +240,9 @@ def build_site(site_dir: str | Path, *, site: str | None = None) -> BuildResult:
                 template=result.template,
                 published=spec.get("published", False),
                 dynamic_route=spec.get("dynamic_route", False),
+                # Server-side Python, not a style value — @token sigils are
+                # never resolved into it, unlike blocks.
+                page_data_script=spec.get("page_data_script", ""),
             )
         )
 

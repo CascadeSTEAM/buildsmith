@@ -191,6 +191,31 @@ class PayloadShape(unittest.TestCase):
         result = a_template(blocks=source)
         self.assertIsNot(result.blocks[0], source[0])
 
+    def test_page_data_script_is_carried_when_set(self):
+        script = 'data.items = frappe.db.get_all("Menu Item", fields=["item_name"])'
+        record = page(
+            title="Menu", route="menu", blocks=BLOCKS, template=a_template(),
+            page_data_script=script,
+        ).record()
+        self.assertEqual(record["page_data_script"], script)
+
+    def test_page_data_script_is_absent_when_unset(self):
+        # Matches every other optional field here (favicon, head_html): an
+        # empty value is omitted rather than sent as "", so applying this
+        # payload never overwrites something already live with nothing.
+        record = page(
+            title="About", route="about", blocks=BLOCKS, template=a_template()
+        ).record()
+        self.assertNotIn("page_data_script", record)
+
+    def test_page_data_script_survives_update_payload(self):
+        script = 'data.items = frappe.db.get_all("Menu Item", fields=["item_name"])'
+        built = page(
+            title="Menu", route="menu", blocks=BLOCKS, template=a_template(),
+            page_data_script=script, name="page-abc12345",
+        )
+        self.assertEqual(built.update_payload()["page_data_script"], script)
+
 
 if __name__ == "__main__":
     unittest.main()
