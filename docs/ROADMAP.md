@@ -211,6 +211,7 @@ buildsmith/                       public except sites/* (§2)
 │   ├── builder-schema.md            GENERATED from the pinned Builder
 │   ├── traps.md                     ledger, each entry with a test (§7)
 │   ├── workflows/replicate.md
+│   ├── workflows/data-driven-pages.md
 │   └── decisions/NNN-*.md           ADRs
 ├── sites/example/                   COMMITTED fictional fixture (no real domain)
 ├── sites/<site>/                    GITIGNORED — private site layer (§2)
