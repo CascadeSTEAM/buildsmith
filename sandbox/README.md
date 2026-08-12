@@ -5,6 +5,7 @@ things that must not be tried on a live site.
 
 ```sh
 buildsmith sandbox up        # build it (slow the first time)
+buildsmith sandbox serve     # start the web server (TRAP-019's check needs it)
 buildsmith check traps       # prove it is faithful
 buildsmith sandbox status    # what exists right now (and the login)
 buildsmith sandbox destroy
