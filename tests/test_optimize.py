@@ -1652,6 +1652,359 @@ class MineComponentize(unittest.TestCase):
         self.assertNotIn("comp-root", dumped)
 
 
+def _shell_leaf(prefix: str, n: int, component_id: str = "nav") -> dict:
+    return {"blockId": f"{prefix}-s{n}", "referenceBlockId": f"{prefix}-s{n}",
+            "extendedFromComponent": component_id}
+
+
+def _existing_component_ref(prefix: str, component_id: str = "nav") -> dict:
+    """A block already extending some OTHER, pre-existing component: three
+    override shells as its children (element=None, as `reset_block_styles()`
+    leaves them) — exactly what TRAP-001's mirror looks like on a real page."""
+    return {
+        "blockId": f"{prefix}-ext", "extendedFromComponent": component_id,
+        "children": [_shell_leaf(prefix, 1, component_id),
+                     _shell_leaf(prefix, 2, component_id),
+                     _shell_leaf(prefix, 3, component_id)],
+    }
+
+
+class DetectionRespectsComponentBoundary(unittest.TestCase):
+    """Prerequisite fix for #19: detection must not treat an existing
+    component reference (or its shell interior) as a candidate — extracting
+    a shell's interior, or re-extracting the reference itself, would mint a
+    fresh component from a bare, contentless TRAP-001 mirror. `annotate()`
+    still counts it honestly, though: only `find_candidates` refuses it."""
+
+    def test_annotate_counts_an_extended_blocks_real_subtree_size(self):
+        # A regression this PR's first pass introduced and the review
+        # caught: truncating this to 1 silently undercounts any ancestor
+        # candidate that happens to contain one.
+        ext = _existing_component_ref("p1")
+        shapes = componentize.annotate(ext)
+        _, count = shapes[id(ext)]
+        self.assertEqual(count, 4)  # itself + 3 shell children
+
+    def test_annotate_hashes_different_extended_components_differently(self):
+        nav = _existing_component_ref("p1", component_id="nav")
+        footer = _existing_component_ref("p1", component_id="footer")
+        self.assertNotEqual(componentize.shape_of(nav)[0],
+                            componentize.shape_of(footer)[0])
+
+    def test_shells_under_an_existing_component_are_never_proposed(self):
+        trees = {f"page:p{i}": [_existing_component_ref(f"p{i}")]
+                 for i in range(5)}
+        self.assertEqual(componentize.find_candidates(trees), [])
+
+    def test_a_real_candidate_beside_an_extended_block_still_surfaces(self):
+        # The boundary fix must not blind detection to genuine repeats that
+        # merely sit next to an existing component reference.
+        trees = {}
+        for i in range(4):
+            label = f"p{i}"
+            trees[f"page:{label}"] = [
+                {"blockId": f"{label}-root", "element": "div",
+                 "children": [_existing_component_ref(label), _c_card(label)]}
+            ]
+        result = componentize.find_candidates(trees)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["occurrences"], 4)
+
+    def test_an_ancestor_containing_an_extended_descendant_is_sized_honestly(self):
+        # The undercount this PR's review caught: an ancestor candidate that
+        # merely CONTAINS an extended reference must still report its real,
+        # full size — not the extended child's truncated-to-1 size.
+        trees = {}
+        for i in range(3):
+            label = f"p{i}"
+            wrapper = {
+                "blockId": f"{label}-wrap", "element": "section",
+                "children": [_existing_component_ref(label), _c_leaf(f"{label}-x")],
+            }
+            trees[f"page:{label}"] = [wrapper]
+        result = componentize.find_candidates(trees)
+        self.assertEqual(len(result), 1)
+        # 1 (wrapper) + 4 (the extended ref: itself + 3 shells) + 1 (leaf) = 6
+        self.assertEqual(result[0]["blocks_per_instance"], 6)
+
+
+class AcceptedProposals(unittest.TestCase):
+    """`accepted_proposals()` — apply()'s input guard, mirroring
+    `tokenize.accepted_mapping`'s refusal shape for componentize's."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.root = Path(self._tmpdir.name)
+        old_root = componentize.ROOT
+        componentize.ROOT = self.root
+        self.addCleanup(lambda: setattr(componentize, "ROOT", old_root))
+
+    def _write(self, proposals: list[dict]) -> None:
+        path = componentize.proposal_path("acme")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"proposals": proposals, "orphaned": []}))
+
+    def test_no_proposal_file_could_not_check(self):
+        # CouldNotCheck subclasses SystemExit, not Exception.
+        with self.assertRaises(SystemExit) as caught:
+            componentize.accepted_proposals("acme")
+        self.assertIn("mine first", str(caught.exception))
+
+    def test_only_accepted_are_returned(self):
+        self._write([{"shape": "a", "name": "card-a", "status": "accepted"},
+                     {"shape": "b", "name": "", "status": "proposed"}])
+        result = componentize.accepted_proposals("acme")
+        self.assertEqual([p["shape"] for p in result], ["a"])
+
+    def test_accepted_but_unnamed_refuses(self):
+        self._write([{"shape": "a", "name": "", "status": "accepted"}])
+        with self.assertRaises(SystemExit) as caught:
+            componentize.accepted_proposals("acme")
+        self.assertIn("unnamed", str(caught.exception))
+
+    def test_duplicate_names_refuse(self):
+        self._write([{"shape": "a", "name": "card", "status": "accepted"},
+                     {"shape": "b", "name": "card", "status": "accepted"}])
+        with self.assertRaises(SystemExit) as caught:
+            componentize.accepted_proposals("acme")
+        self.assertIn("duplicate", str(caught.exception).lower())
+
+
+class RunComponentizeApply(unittest.TestCase):
+    """componentize.apply() end to end against a tempdir standing in for
+    `sites/`. componentize.ROOT and tokenize.ROOT are monkeypatched together,
+    mirroring RunCollapse — apply() sources checkpoint state and the
+    staleness guard via tokenize, proposals via componentize."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.root = Path(self._tmpdir.name)
+
+        from buildsmith.workflows.optimize import gates
+
+        old_componentize_root = componentize.ROOT
+        old_tokenize_root = tokenize.ROOT
+        old_gates_root = gates.ROOT
+        componentize.ROOT = self.root
+        tokenize.ROOT = self.root
+        gates.ROOT = self.root
+        self.addCleanup(
+            lambda: setattr(componentize, "ROOT", old_componentize_root))
+        self.addCleanup(lambda: setattr(tokenize, "ROOT", old_tokenize_root))
+        self.addCleanup(lambda: setattr(gates, "ROOT", old_gates_root))
+
+        old_read_state = capture_dev.read_state
+        old_content_hash = capture_dev._content_hash
+        self.addCleanup(
+            lambda: setattr(capture_dev, "read_state", old_read_state))
+        self.addCleanup(
+            lambda: setattr(capture_dev, "_content_hash", old_content_hash))
+        capture_dev.read_state = lambda target: {"sentinel": True}
+        capture_dev._content_hash = lambda state: "matching-hash"
+
+    def _card(self, prefix: str, title: str = "Same title",
+             colour: str = "blue") -> dict:
+        return {
+            "blockId": f"{prefix}-card", "element": "div",
+            # every instance carries a baseStyles.color KEY — annotate()'s
+            # shape hash includes key sets, not values, so this stays one
+            # shape across pages regardless of the value given here.
+            "baseStyles": {"color": colour},
+            "children": [
+                {"blockId": f"{prefix}-h", "element": "h2",
+                 "innerHTML": title},
+                {"blockId": f"{prefix}-p1", "element": "p"},
+                {"blockId": f"{prefix}-p2", "element": "p"},
+            ],
+        }
+
+    def _write_pages(self, titles: dict[str, str],
+                     colours: dict[str, str] | None = None) -> None:
+        state = self.root / "sites" / "acme" / "opt" / "baseline" / "state"
+        (state / "pages").mkdir(parents=True, exist_ok=True)
+        (state / "components").mkdir(parents=True, exist_ok=True)
+        colours = colours or {}
+        for name, title in titles.items():
+            card = self._card(name, title, colours.get(name, "blue"))
+            (state / "pages" / f"{name}.json").write_text(json.dumps({
+                "name": name, "route": name,
+                "blocks": json.dumps([card]),
+            }))
+        (state / "manifest.json").write_text(
+            json.dumps({"content_hash": "matching-hash"}))
+
+    def _accept(self, name: str = "test-card") -> None:
+        componentize.mine("acme")
+        path = componentize.proposal_path("acme")
+        data = json.loads(path.read_text())
+        data["proposals"][0]["name"] = name
+        data["proposals"][0]["status"] = "accepted"
+        path.write_text(json.dumps(data))
+
+    def test_no_accepted_proposals_could_not_check(self):
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        componentize.mine("acme")
+        with self.assertRaises(SystemExit) as caught:
+            componentize.apply("acme")
+        self.assertIn("accepted", str(caught.exception))
+
+    def test_identical_instances_are_applied_and_status_updates(self):
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        self._accept()
+
+        def runner(script):
+            return json.dumps({"created": ["test-card"], "collisions": []})
+
+        result = componentize.apply("acme", runner=runner)
+
+        self.assertEqual(len(result["applied"]), 1)
+        self.assertEqual(set(result["targets"]), {"home", "menu", "about"})
+        self.assertEqual(result["skipped"], [])
+        data = json.loads(componentize.proposal_path("acme").read_text())
+        self.assertEqual(data["proposals"][0]["status"], "applied")
+
+    def test_shells_carry_the_pages_own_ids_and_reference_the_component(self):
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        self._accept()
+
+        def runner(script):
+            return json.dumps({"created": ["test-card"], "collisions": []})
+
+        componentize.apply("acme", runner=runner)
+
+        out_dir = self.root / "sites" / "acme" / "opt" / "transforms" / "componentize"
+        home_root = json.loads((out_dir / "page-home.json").read_text())[0]
+        # the page's own blockId at every position must survive — anything
+        # on the page already referring to it by id must still resolve
+        self.assertTrue(home_root["blockId"].startswith("home-"))
+        self.assertEqual(home_root["extendedFromComponent"], "test-card")
+        self.assertIn("referenceBlockId", home_root)
+
+    def test_divergent_content_is_skipped_and_left_accepted(self):
+        self._write_pages({"home": "t", "menu": "t", "about": "DIFFERENT"})
+        self._accept()
+
+        def boom(script):
+            raise AssertionError("a divergent shape must never reach the runner")
+
+        result = componentize.apply("acme", runner=boom)
+
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(len(result["skipped"]), 1)
+        data = json.loads(componentize.proposal_path("acme").read_text())
+        self.assertEqual(data["proposals"][0]["status"], "accepted")
+
+    def test_a_style_only_divergence_is_also_skipped(self):
+        # _content_signature must catch more than assert_content_preserved's
+        # innerHTML/href/src — a style VALUE difference (same key, so the
+        # shape hash is unaffected and all three land in one proposal) is
+        # just as unpreservable by a bare shell as a text difference.
+        self._write_pages({"home": "t", "menu": "t", "about": "t"},
+                          colours={"home": "blue", "menu": "blue", "about": "red"})
+        self._accept()
+
+        def boom(script):
+            raise AssertionError("must not reach the runner")
+
+        result = componentize.apply("acme", runner=boom)
+
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(len(result["skipped"]), 1)
+
+    def test_component_id_collision_refuses_and_writes_nothing(self):
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        self._accept()
+
+        def runner(script):
+            return json.dumps({"created": [], "collisions": ["test-card"]})
+
+        with self.assertRaises(SystemExit) as caught:
+            componentize.apply("acme", runner=runner)
+        self.assertIn("REFUSED", str(caught.exception))
+        data = json.loads(componentize.proposal_path("acme").read_text())
+        self.assertEqual(data["proposals"][0]["status"], "accepted")
+
+    def test_stale_checkpoint_refuses_before_touching_anything(self):
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        self._accept()
+        capture_dev._content_hash = lambda state: "some-other-hash"
+
+        def boom(script):
+            raise AssertionError("must not reach the runner")
+
+        with self.assertRaises(SystemExit) as caught:
+            componentize.apply("acme", runner=boom)
+        self.assertIn("REFUSED", str(caught.exception))
+
+    def test_a_proposal_with_no_recorded_instances_is_skipped_not_crashed(self):
+        # Review finding: located[0] was indexed unguarded — an empty
+        # instances list (hand-edited decision record, bad merge) must be
+        # reported, not raise an unhandled IndexError.
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        self._accept()
+        path = componentize.proposal_path("acme")
+        data = json.loads(path.read_text())
+        data["proposals"][0]["instances"] = []
+        path.write_text(json.dumps(data))
+
+        def boom(script):
+            raise AssertionError("must not reach the runner")
+
+        result = componentize.apply("acme", runner=boom)
+
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(len(result["skipped"]), 1)
+
+    def test_a_blockid_less_descendant_refuses_cleanly_not_a_traceback(self):
+        # Review finding: _content_signature doesn't check blockId presence
+        # (by design — blockId is identity, expected to vary), so a
+        # content-identical instance whose interior node happens to lack one
+        # reaches override_shells(), which raises ComponentError. That must
+        # surface as a clean REFUSED SystemExit, not an uncaught traceback.
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        componentize.mine("acme")
+        state = (self.root / "sites" / "acme" / "opt" / "baseline"
+                / "state" / "pages" / "about.json")
+        record = json.loads(state.read_text())
+        blocks = json.loads(record["blocks"])
+        del blocks[0]["children"][1]["blockId"]  # about's own "-p1" node
+        record["blocks"] = json.dumps(blocks)
+        state.write_text(json.dumps(record))
+        self._accept()
+
+        def boom(script):
+            raise AssertionError("must not reach the runner")
+
+        with self.assertRaises(SystemExit) as caught:
+            componentize.apply("acme", runner=boom)
+        self.assertIn("REFUSED", str(caught.exception))
+
+
+class ContentSignatureCatchesExtensionDivergence(unittest.TestCase):
+    """Review finding: a bare TRAP-001 shell carries no element, styles, or
+    content of its own — without extendedFromComponent/referenceBlockId in
+    the signature, two instances extending DIFFERENT pre-existing components
+    at the same nested position would look content-identical."""
+
+    def test_different_extended_component_differs(self):
+        a = {"blockId": "x", "extendedFromComponent": "social-icons",
+             "referenceBlockId": "ref-1"}
+        b = {"blockId": "x", "extendedFromComponent": "newsletter-signup",
+             "referenceBlockId": "ref-1"}
+        self.assertNotEqual(componentize._content_signature(a),
+                            componentize._content_signature(b))
+
+    def test_same_extended_component_and_reference_matches(self):
+        a = {"blockId": "x", "extendedFromComponent": "social-icons",
+             "referenceBlockId": "ref-1"}
+        b = {"blockId": "y", "extendedFromComponent": "social-icons",
+             "referenceBlockId": "ref-1"}
+        self.assertEqual(componentize._content_signature(a),
+                         componentize._content_signature(b))
+
+
 if __name__ == "__main__":
     unittest.main()
 

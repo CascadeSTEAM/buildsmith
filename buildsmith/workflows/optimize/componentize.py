@@ -9,11 +9,19 @@ are exactly what varies between instances of the same structure.
 The output is a proposal file (`opt/proposals/components.json`) — the
 persisted decision artifact (ADR-009). Each candidate carries the shape's
 occurrence count, where the instances live, its size in blocks, and a
-`status` a human flips to "accepted". Nothing here writes to the sandbox:
-the apply half is a separate step, because turning an accepted proposal into
-a Builder Component and rewriting pages to extend it is TRAP-001 territory
-(override shells mirrored by blockId) and goes through
-`primitives/components.py`, `simulate`, and the oracle.
+`status` a human flips to "accepted".
+
+Half two, `apply()`, turns an accepted proposal into a Builder Component and
+rewrites every instance into an override shell — TRAP-001 territory, so it
+goes through `primitives/components.py`'s `compose()`/`override_shells()`
+and ends in the rendering oracle, same as every other Phase A transform.
+It is scoped to the case an accepted shape's instances are already
+content-identical: nothing distinguishes them, so the shell each becomes is
+legitimately empty. A shape with genuinely divergent per-instance content
+(different text, links, or styles between occurrences) is reported and left
+`accepted`, not applied and not guessed at — extracting a shape like that
+needs to construct real per-instance overrides, which is separate, harder
+work (issue #19's proposal comment).
 
 Candidates are reported largest-first: extracting the 12-block card repeated
 40 times is the win; the 2-block pair repeated twice is noise. Nested
@@ -26,7 +34,11 @@ import hashlib
 import json
 from pathlib import Path
 
+from buildsmith.errors import CouldNotCheck
+from buildsmith.primitives.blocks import walk
 from buildsmith.workflows.optimize.tokenize import (
+    _accepted_named,
+    _refuse_stale_checkpoint,
     _select,
     load_state,
 )
@@ -47,6 +59,14 @@ def annotate(root: dict) -> dict[int, tuple[str, int]]:
     is both fragile and O(n^2). The payload is JSON, not delimiter-joined —
     a class name containing '.' or '|' must not collide two different
     structures into one shape.
+
+    An `extendedFromComponent` block's own hash is keyed on WHICH component
+    it extends (not just whether it extends one): two references to
+    different existing components must never hash the same just because
+    both happen to be bare, empty TRAP-001 shells. Its children are still
+    walked and counted honestly — `find_candidates` is what refuses to treat
+    the block or its interior as a candidate, not this function — so an
+    ancestor containing one still gets its real, full block count.
     """
     shapes: dict[int, tuple[str, int]] = {}
     stack: list[tuple[dict, bool]] = [(root, False)]
@@ -74,7 +94,7 @@ def annotate(root: dict) -> dict[int, tuple[str, int]]:
             (block.get("element") or "?").lower(),
             style_shape,
             named_classes,
-            bool(block.get("extendedFromComponent")),
+            block.get("extendedFromComponent"),
             bool(block.get("isRepeaterBlock")),
             child_shapes,
         ], separators=(",", ":"))
@@ -96,6 +116,15 @@ def find_candidates(trees: dict[str, list[dict]]) -> list[dict]:
     but free-standing instances of the same shape still count — and only
     shapes with enough FREE instances are reported, so totals never
     double-count a block.
+
+    An `extendedFromComponent` block is invisible here, in both directions:
+    never recorded as a candidate itself (composing a "new" component from
+    one would compose from a bare TRAP-001 shell — no element, no styles, no
+    content — silently discarding whatever it currently, correctly extends),
+    and never descended into (its children are that other component's
+    shells, not free structure of this page — mirrors `collapse.safe_walk`).
+    An ancestor that merely *contains* one still gets it, honestly sized, via
+    `annotate()`'s ordinary child_shapes/count — only candidacy is refused.
     """
     instances: dict[str, list[dict]] = {}
     sizes: dict[str, int] = {}
@@ -106,6 +135,8 @@ def find_candidates(trees: dict[str, list[dict]]) -> list[dict]:
             stack: list[tuple[dict, list[str]]] = [(root, [])]
             while stack:
                 block, ancestors = stack.pop()
+                if block.get("extendedFromComponent"):
+                    continue
                 digest, count = shapes[id(block)]
                 sizes[digest] = count
                 instances.setdefault(digest, []).append(
@@ -202,3 +233,244 @@ def mine(site: str, *, routes: list[str] | None = None) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
     return data
+
+
+def _content_signature(block: dict) -> tuple:
+    """A hashable fingerprint of everything an empty shell cannot preserve.
+
+    Broader than `components.assert_content_preserved`'s innerHTML/href/src:
+    that guard exists to catch content a *revision* dropped, not to prove two
+    *instances* are safe to collapse into one bare shell — a style difference
+    between two instances (say, one card's accent colour) is just as much a
+    thing an empty shell would silently erase as a text difference is.
+    blockId is excluded on purpose: it is identity, expected to differ, and
+    is exactly what `override_shells()` preserves per instance regardless.
+
+    `extendedFromComponent`/`referenceBlockId` are included deliberately, not
+    excluded like blockId: a bare TRAP-001 shell carries no element, styles,
+    or content of its own, so without these two instances that each extend a
+    *different* pre-existing component at the same nested position would
+    otherwise signature identically — and get silently overwritten to
+    extend whichever one happens to be the exemplar's.
+    """
+    return tuple(
+        (
+            node.get("element"),
+            node.get("innerHTML"),
+            json.dumps(node.get("attributes") or {}, sort_keys=True),
+            json.dumps(node.get("customAttributes") or {}, sort_keys=True),
+            json.dumps(node.get("baseStyles") or {}, sort_keys=True),
+            json.dumps(node.get("mobileStyles") or {}, sort_keys=True),
+            json.dumps(node.get("tabletStyles") or {}, sort_keys=True),
+            json.dumps(node.get("rawStyles") or {}, sort_keys=True),
+            tuple(sorted(node.get("classes") or [])),
+            json.dumps(node.get("dynamicValues") or [], sort_keys=True),
+            json.dumps(node.get("visibilityCondition"), sort_keys=True),
+            bool(node.get("isRepeaterBlock")),
+            node.get("extendedFromComponent"),
+            node.get("referenceBlockId"),
+        )
+        for node in walk(block)
+    )
+
+
+def _find_by_block_id(roots: list[dict], block_id: str) -> dict | None:
+    """The node with this blockId under one of `roots`'s trees, or None."""
+    for root in roots:
+        for node in walk(root):
+            if node.get("blockId") == block_id:
+                return node
+    return None
+
+
+def accepted_proposals(site: str) -> list[dict]:
+    """Accepted, named proposals from the decision record. Refuses ambiguity,
+    sharing its rule with `tokenize.accepted_mapping`."""
+    return _accepted_named(site, path=proposal_path(site),
+                           id_field="shape", noun="component")
+
+
+def apply(site: str, *, target: str = "sandbox.localhost",
+          runner=None) -> dict:
+    """Apply accepted proposals whose every instance is content-identical to
+    its exemplar: mint a `Builder Component`, replace each instance with an
+    override shell, write back, and let the oracle prove nothing rendered
+    differently.
+
+    A proposal whose instances disagree on content or style is reported in
+    `skipped` and left untouched (`status` stays "accepted") — see the
+    module docstring for why this is a deliberate scope cut, not a bug.
+
+    Unlike `tokenize.apply`/`fonts.apply`, there is no `clone_url`: those
+    verify a literal-to-token or font-load proof against the served site
+    before the oracle runs; extraction has no analogous serving-side check
+    to make — the oracle at the end of `optimize componentize --apply` is
+    already the whole proof (ADR-009).
+    """
+    from buildsmith.primitives.components import (
+        ComponentError,
+        compose,
+        override_shells,
+        slug_to_component_id,
+    )
+    from buildsmith.tools.sandbox import run_bench
+
+    accepted = accepted_proposals(site)
+    if not accepted:
+        raise CouldNotCheck("no accepted proposals — nothing to apply")
+
+    for proposal in accepted:
+        try:
+            slug_to_component_id(proposal["name"])
+        except ComponentError as exc:
+            raise SystemExit(f"{proposal['shape']}: {exc}") from exc
+
+    # staleness guard: extraction sources block trees from the baseline
+    # checkpoint, same reason tokenize refuses against a stale one.
+    _refuse_stale_checkpoint(site, target=target)
+
+    pages, _components = load_state(site)
+
+    ready: list[dict] = []
+    skipped: list[dict] = []
+    for proposal in accepted:
+        instances = proposal["instances"]
+        if not instances:
+            skipped.append({
+                "shape": proposal["shape"], "name": proposal["name"],
+                "reason": "the proposal records no instances at all — "
+                         "nothing to extract",
+            })
+            continue
+
+        located: list[tuple[str, str, dict]] = []
+        missing = []
+        for instance in instances:
+            label = instance["label"]
+            page_name = label.partition(":")[2]
+            roots = pages.get(page_name)
+            node = _find_by_block_id(roots, instance["blockId"]) if roots else None
+            if node is None:
+                missing.append(f"{label}#{instance['blockId']}")
+                continue
+            located.append((page_name, instance["blockId"], node))
+        if missing:
+            skipped.append({
+                "shape": proposal["shape"], "name": proposal["name"],
+                "reason": f"{len(missing)} instance(s) not found in the "
+                         f"current checkpoint (stale proposal?): {missing[:3]}",
+            })
+            continue
+
+        exemplar = located[0][2]
+        signature = _content_signature(exemplar)
+        diverged = [f"{page}#{block_id}" for page, block_id, node in located[1:]
+                   if _content_signature(node) != signature]
+        if diverged:
+            skipped.append({
+                "shape": proposal["shape"], "name": proposal["name"],
+                "reason": "instance(s) carry different content or styles "
+                         f"than the exemplar — not applied: {diverged[:3]}"
+                         f"{'...' if len(diverged) > 3 else ''}. Extracting "
+                         "this shape needs per-instance override "
+                         "construction, which this apply does not do yet.",
+            })
+            continue
+
+        ready.append({"proposal": proposal, "exemplar": exemplar,
+                      "located": located})
+
+    out_dir = ROOT / "sites" / site / "opt" / "transforms" / "componentize"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    components_payload: dict[str, dict] = {}
+    touched_pages: set[str] = set()
+    applied_shapes: list[str] = []
+    for item in ready:
+        proposal, exemplar = item["proposal"], item["exemplar"]
+        component_id = proposal["name"]
+        component_name = component_id.replace("-", " ").title()
+
+        composed = compose(
+            component_id=component_id, component_name=component_name,
+            root=exemplar,
+        )
+        for page_name, block_id, node in item["located"]:
+            try:
+                shell = override_shells(composed.block, node,
+                                        component_id=component_id)
+            except ComponentError as exc:
+                raise SystemExit(
+                    f"REFUSED: {page_name}#{block_id} could not become an "
+                    f"override shell for {component_id!r}: {exc}") from exc
+            # `node` is the exact dict object embedded in `pages[page_name]`
+            # (from `_find_by_block_id`, which never copies) — updating it
+            # in place reaches that page's tree with no second tree walk.
+            node.clear()
+            node.update(shell)
+            touched_pages.add(page_name)
+
+        record = composed.record()
+        components_payload[component_id] = record
+        applied_shapes.append(proposal["shape"])
+        (out_dir / f"component-{component_id}.json").write_text(
+            json.dumps(record, indent=2) + "\n")
+
+    pages_payload = {name: pages[name] for name in sorted(touched_pages)}
+    for name, roots in pages_payload.items():
+        (out_dir / f"page-{name}.json").write_text(
+            json.dumps(roots, indent=2) + "\n")
+
+    if components_payload:
+        from buildsmith.workflows.optimize import gates
+
+        # Ledger before mutation — library-level so no caller can mutate the
+        # sandbox without a pending entry, same as every other transform.
+        gates.record_apply(site, "componentize", target=target)
+
+        run_fn = runner or run_bench
+        script = f"""
+import frappe, json
+frappe.init({json.dumps(target)}); frappe.connect()
+frappe.flags.in_import = True
+
+components = json.loads({json.dumps(json.dumps(components_payload))})
+collisions = [cid for cid in components
+              if frappe.db.exists('Builder Component', {{'component_id': cid}})]
+if collisions:
+    print(json.dumps({{'created': [], 'collisions': collisions}}))
+else:
+    for cid, payload in components.items():
+        payload['block'] = json.dumps(payload['block'])
+        frappe.get_doc(payload).insert()
+    pages = json.loads({json.dumps(json.dumps(pages_payload))})
+    for name, roots in pages.items():
+        doc = frappe.get_doc('Builder Page', name)
+        doc.blocks = json.dumps(roots)
+        doc.save()
+    frappe.db.commit()
+    from frappe.website.utils import clear_website_cache
+    clear_website_cache()
+    print(json.dumps({{'created': sorted(components), 'collisions': []}}))
+"""
+        result = json.loads(run_fn(script).strip().splitlines()[-1])
+        if result["collisions"]:
+            raise SystemExit(
+                "REFUSED: component_id already exists on the site, not "
+                f"minted by this apply: {sorted(result['collisions'])}. "
+                "Nothing was written — rename the proposal or investigate "
+                "the existing record before retrying.")
+
+    if applied_shapes:
+        path = proposal_path(site)
+        data = json.loads(path.read_text())
+        for p in data["proposals"]:
+            if p["shape"] in applied_shapes:
+                p["status"] = "applied"
+        path.write_text(json.dumps(data, indent=2) + "\n")
+
+    return {
+        "applied": sorted(applied_shapes),
+        "targets": sorted(touched_pages),
+        "skipped": skipped,
+    }

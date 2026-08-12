@@ -468,11 +468,37 @@ def cmd_optimize(args: argparse.Namespace) -> int:
         routes = ([r.strip() for r in args.routes.split(",") if r.strip()]
                   if args.routes else None)
         if args.apply:
-            print("componentize --apply is not built yet: extraction is "
-                  "TRAP-001 machinery (override shells, simulate, oracle) "
-                  "and lands as its own step. The proposal file is the "
-                  "decision record meanwhile.", file=sys.stderr)
-            return EXIT_UNCHECKED
+            if routes:
+                # unlike tokenize/fonts/collapse, one proposal spans however
+                # many pages it was mined from — there is no honest partial
+                # meaning for "apply only within these routes", so this
+                # refuses rather than silently ignoring the flag.
+                raise SystemExit(
+                    "--routes is not supported with componentize --apply: "
+                    "an accepted proposal applies to every instance it "
+                    "lists, or is skipped whole — never partially.")
+            if args.clone:
+                # componentize has no serving-side proof to check a clone
+                # URL against (see apply()'s docstring) — refuse rather than
+                # silently accept a flag that would do nothing.
+                raise SystemExit(
+                    "--clone is not used by componentize --apply: there is "
+                    "no serving-side check to run it against.")
+            result = comp_mod.apply(args.site, target=args.target)
+            print(f"applied: {len(result['applied'])}  "
+                  f"pages rewritten: {len(result['targets'])}")
+            for skip in result["skipped"]:
+                print(f"  NOT applied — {skip['name'] or skip['shape']}: "
+                      f"{skip['reason']}", file=sys.stderr)
+            journal.append(
+                args.site, "optimize componentize",
+                notes=f"{len(result['applied'])} component(s) extracted; "
+                      f"{len(result['skipped'])} shape(s) skipped")
+            if not result["applied"]:
+                return EXIT_UNCHECKED
+            print("extraction written. Running the rendering oracle — the "
+                  "human sign-off on the proposal still applies.")
+            return _prove_by_oracle(args.site)
         data = comp_mod.mine(args.site, routes=routes)
         print(f"{len(data['proposals'])} repeated structure(s) -> "
               f"{comp_mod.proposal_path(args.site)}")
