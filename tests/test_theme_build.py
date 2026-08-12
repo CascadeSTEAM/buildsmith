@@ -56,7 +56,7 @@ class TokenResolution(unittest.TestCase):
 class BuildingTheExampleSite(unittest.TestCase):
     def test_it_builds(self):
         result = build_site(EXAMPLE, site="example")
-        self.assertEqual(result.counts["components"], 2)
+        self.assertEqual(result.counts["components"], 3)
         self.assertEqual(result.counts["templates"], 1)
         self.assertGreaterEqual(result.counts["pages"], 1)
 
@@ -94,8 +94,13 @@ class BuildingTheExampleSite(unittest.TestCase):
             result = build_site(site, site="example")
         self.assertEqual(len(result.token_plan), 0)
         self.assertEqual(result.warnings, [])
-        # And every colour is now a real reference, not a literal.
-        styles = result.components[0].block["baseStyles"]
+        # And every colour is now a real reference, not a literal. site-header's
+        # baseStyles are @token sigils with nothing else mixed in; location-map's
+        # are not (it also carries plain literals like `borderStyle: "solid"`),
+        # so this checks the component whose spec makes the "every value" claim
+        # true rather than the first component alphabetically.
+        header = next(c for c in result.components if c.component_id == "site-header")
+        styles = header.block["baseStyles"]
         self.assertTrue(all(v.startswith("var(--uuid-") for v in styles.values()))
 
     def test_payloads_can_be_written_out(self):
