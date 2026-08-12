@@ -463,6 +463,56 @@ where the web path swallows.
 
 ---
 
+## — TRAP-019 — A component-extended child renders on the published page and nowhere in the editor
+
+**Symptom.** A `Builder Component` composed as `div > iframe` (`buildsmith`'s
+first cut of the map-embed component, #9) extends onto a page correctly: the
+published route serves the exact `<iframe src=...>` the component specifies,
+proven by `curl`ing it. Opening the same page in the Builder editor
+(`/builder/page/<name>`) shows the `div` at the right size, correctly styled
+— and an empty box where the map should be. No error, no console warning; the
+child block simply is not in the editor's DOM at all (`document
+.querySelectorAll('iframe').length === 0`).
+
+**Cause, isolated by a control test.** Loaded Builder's own shipped `YouTube`
+Block Template (`builder/builder/builder_block_template/youtube/youtube.json`
+upstream) onto a page — also an `iframe`, but authored directly on the page,
+never through `extendedFromComponent`. It rendered live in the editor with no
+trouble. The difference is component-extension depth: a component's **root**
+block, extended onto a page's shell, resolves and renders correctly in the
+editor canvas (confirmed separately with an `iframe`-as-root component, which
+also rendered live) — but a block **nested inside** an extended root does not
+get resolved for the editor's own Vue render tree, only for the server-side
+Jinja renderer that builds the published page. `frontend/src/utils/block
+/componentInstance.ts`'s `extendWithComponent` recurses per matching child by
+array index and sets bookkeeping (`referenceBlockId`, `isChildOfComponent`)
+but the resolved `element` a nested child needs to pick the right Vue render
+path apparently does not reach the canvas the same way it reaches the
+published-page renderer. Not traced further than that — the point at which
+`Block`'s reactive getters resolve an inherited `element` through
+`referenceComponent` is in code not yet read closely enough to name the exact
+line.
+
+**Rule.** Root a component on the element that must actually be visible and
+interactive in the editor — an `iframe`, in this case — rather than wrapping
+it in a `div`. Confirmed twice, by screenshot: `div > iframe` renders blank in
+the editor; a bare `iframe` root (styled directly — border-radius clips an
+iframe's own box the same way it clips `img`/`video`, no `overflow: hidden`
+wrapper needed) renders live with tiles and the marker pin. `buildsmith
+primitives.maps.location_map()` was rebuilt this way *because* of this trap,
+not before it.
+
+**Testable:** not yet — this needs a browser against a live sandbox instance
+(`/builder/page/<name>`, cookie-authenticated, checked for an `<iframe>` in
+the rendered DOM), and `buildsmith check traps` today runs pure bench-console
+scripts with no browser dependency. `tests/test_maps.py` pins the *output
+shape* `location_map()` now produces (iframe as root); it cannot see the
+editor-canvas behaviour that shape exists to route around. A real ★ upgrade
+would add a Playwright-driven check here — worth doing before a second
+component is built on top of an extension boundary and hits this blind.
+
+---
+
 ## Adding a trap
 
 1. Append an entry here with symptom, rule, and whether it is testable.

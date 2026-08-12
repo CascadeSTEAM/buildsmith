@@ -116,21 +116,23 @@ class LocationMap(unittest.TestCase):
         self.assertIn("does not geocode", str(caught.exception))
 
     def test_osm_with_coordinates_embeds_the_osm_url(self):
+        # The iframe IS the root — not a child of a wrapping div. TRAP-019:
+        # a div-wrapped child extended from a component never rendered in the
+        # Builder editor canvas, only on the published page.
         root = location_map(address="1 Example Way, Nowhere", lat=0.0, lon=0.0)
-        iframe = root["children"][0]
-        self.assertEqual(root["element"], "div")
-        self.assertEqual(iframe["element"], "iframe")
-        self.assertTrue(iframe["attributes"]["src"].startswith(
+        self.assertEqual(root["element"], "iframe")
+        self.assertNotIn("children", root)
+        self.assertTrue(root["attributes"]["src"].startswith(
             "https://www.openstreetmap.org/export/embed.html?"
         ))
-        self.assertEqual(iframe["attributes"]["title"], "Map: 1 Example Way, Nowhere")
+        self.assertEqual(root["attributes"]["title"], "Map: 1 Example Way, Nowhere")
 
     def test_google_needs_no_coordinates(self):
         root = location_map(
             address="1 Example Way, Nowhere", provider="google",
         )
-        iframe = root["children"][0]
-        self.assertTrue(iframe["attributes"]["src"].startswith("https://maps.google.com/maps?"))
+        self.assertEqual(root["element"], "iframe")
+        self.assertTrue(root["attributes"]["src"].startswith("https://maps.google.com/maps?"))
 
     def test_unknown_provider_refused(self):
         with self.assertRaises(EmbedError):

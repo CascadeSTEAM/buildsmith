@@ -31,8 +31,7 @@ is a component prop plus one injected stylesheet (TRAP-004).
 ### `location-map` — Location Map
 
 ```
-<div>
-  <iframe>
+<iframe>
 ```
 
 **Tokens consumed:** `map-border`, `map-height`, `map-radius`, `map-width`

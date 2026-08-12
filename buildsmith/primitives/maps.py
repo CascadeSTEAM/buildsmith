@@ -18,12 +18,12 @@ by hand, via OSM's own Share panel or any geocoder — rather than reaching for
 one quietly. `EmbedError` says so when they are missing, rather than the
 component silently falling back to Google or to no map at all.
 
-Emits a plain block tree — a `div` wrapping the `iframe` — with `@token`
-sigils for the properties the issue asked to be themeable (sizing, border),
-exactly like every other component spec under `design/components/*.json`.
-Resolving those sigils and composing the result into a `Builder Component` is
-`build_site()`'s job, same as `site-header.json`/`site-footer.json`; this
-module only builds the tree.
+Emits a single `iframe` block — not a wrapper `div` around one; see TRAP-019
+in `location_map()`'s docstring — with `@token` sigils for the properties the
+issue asked to be themeable (sizing, border), exactly like every other
+component spec under `design/components/*.json`. Resolving those sigils and
+composing the result into a `Builder Component` is `build_site()`'s job, same
+as `site-header.json`/`site-footer.json`; this module only builds the tree.
 
 Nothing here touches a site, and nothing here touches the network.
 """
@@ -118,11 +118,23 @@ def location_map(
     border_color: str = "@map-border",
     border_width: str = "1px",
 ) -> dict:
-    """Build the block tree for a location map: a bare `div` wrapping the embed `iframe`.
+    """Build the block tree for a location map: a bare `iframe`, and nothing wrapping it.
 
     `address` is always required — it becomes the iframe's accessible `title`,
     and for `provider="google"` it is also the query the embed resolves. It is
     never geocoded here.
+
+    **The `iframe` is the root block, not a child of a wrapping `div`.**
+    That was not the first shape this took — a `div > iframe` tree passed
+    every check this module had (`blocks.validate()`, the colour-tokenisation
+    check, a real `buildsmith load` into the pinned sandbox with a byte-exact
+    DB read-back) and still rendered as a blank box in the Builder *editor*
+    canvas, live coordinates confirmed by extending it onto a real page and
+    opening `/builder/page/...` in a browser. A control test against
+    Builder's own built-in YouTube block — also an iframe, authored directly
+    on a page rather than through component-extension — rendered live with no
+    trouble. Flattening this component to root on the `iframe` itself (proven
+    the same way, screenshot included) fixed it. See TRAP-019.
 
     Sizing and border are longhand CSS properties, not the `border` shorthand:
     `assert_colours_tokenised` (components.py) already documents why a
@@ -132,6 +144,10 @@ def location_map(
     `width`/`height`/`border_radius`/`border_color` default to `@map-*` sigils
     so the component themes with the site by default; pass a plain literal
     (e.g. `width="400px"`) for a site that would rather not mint new tokens.
+    No `overflow: hidden` is needed to make the radius take — a browser clips
+    an iframe's own rendered box to it directly, the same as it would an
+    `img` or `video` (confirmed in the same screenshot: the pin and tiles stay
+    inside the rounded corners with no wrapper at all).
 
     Runs `blocks.validate()` before returning, so a structural mistake fails
     here rather than downstream. Colour-tokenisation is not checked — that is
@@ -157,7 +173,12 @@ def location_map(
         src = osm_embed_src(lat, lon, span=span)
 
     root = new_block(
-        "div",
+        "iframe",
+        attributes={
+            "src": src,
+            "loading": "lazy",
+            "title": f"Map: {address}",
+        },
         base_styles={
             "width": width,
             "height": height,
@@ -165,19 +186,7 @@ def location_map(
             "borderWidth": border_width,
             "borderStyle": "solid",
             "borderColor": border_color,
-            "overflow": "hidden",
         },
-        children=[
-            new_block(
-                "iframe",
-                attributes={
-                    "src": src,
-                    "loading": "lazy",
-                    "title": f"Map: {address}",
-                },
-                base_styles={"width": "100%", "height": "100%", "border": "none"},
-            )
-        ],
     )
     validate(root)
     return root
