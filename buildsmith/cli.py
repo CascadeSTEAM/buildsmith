@@ -477,9 +477,14 @@ def cmd_optimize(args: argparse.Namespace) -> int:
                     "--routes is not supported with componentize --apply: "
                     "an accepted proposal applies to every instance it "
                     "lists, or is skipped whole — never partially.")
-            result = comp_mod.apply(
-                args.site, clone_url=args.clone or "http://127.0.0.1:8000",
-                target=args.target)
+            if args.clone:
+                # componentize has no serving-side proof to check a clone
+                # URL against (see apply()'s docstring) — refuse rather than
+                # silently accept a flag that would do nothing.
+                raise SystemExit(
+                    "--clone is not used by componentize --apply: there is "
+                    "no serving-side check to run it against.")
+            result = comp_mod.apply(args.site, target=args.target)
             print(f"applied: {len(result['applied'])}  "
                   f"pages rewritten: {len(result['targets'])}")
             for skip in result["skipped"]:

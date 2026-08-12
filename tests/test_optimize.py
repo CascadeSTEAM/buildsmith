@@ -1670,16 +1670,26 @@ def _existing_component_ref(prefix: str, component_id: str = "nav") -> dict:
 
 
 class DetectionRespectsComponentBoundary(unittest.TestCase):
-    """Prerequisite fix for #19: detection must not descend into an existing
-    component's override shells (unlike `collapse.safe_walk`, it used to).
-    Extracting a shell's interior would mint a fresh component nested inside
-    another component's TRAP-001 mirror."""
+    """Prerequisite fix for #19: detection must not treat an existing
+    component reference (or its shell interior) as a candidate — extracting
+    a shell's interior, or re-extracting the reference itself, would mint a
+    fresh component from a bare, contentless TRAP-001 mirror. `annotate()`
+    still counts it honestly, though: only `find_candidates` refuses it."""
 
-    def test_annotate_treats_an_extended_block_as_childless(self):
+    def test_annotate_counts_an_extended_blocks_real_subtree_size(self):
+        # A regression this PR's first pass introduced and the review
+        # caught: truncating this to 1 silently undercounts any ancestor
+        # candidate that happens to contain one.
         ext = _existing_component_ref("p1")
         shapes = componentize.annotate(ext)
         _, count = shapes[id(ext)]
-        self.assertEqual(count, 1)
+        self.assertEqual(count, 4)  # itself + 3 shell children
+
+    def test_annotate_hashes_different_extended_components_differently(self):
+        nav = _existing_component_ref("p1", component_id="nav")
+        footer = _existing_component_ref("p1", component_id="footer")
+        self.assertNotEqual(componentize.shape_of(nav)[0],
+                            componentize.shape_of(footer)[0])
 
     def test_shells_under_an_existing_component_are_never_proposed(self):
         trees = {f"page:p{i}": [_existing_component_ref(f"p{i}")]
@@ -1699,6 +1709,23 @@ class DetectionRespectsComponentBoundary(unittest.TestCase):
         result = componentize.find_candidates(trees)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["occurrences"], 4)
+
+    def test_an_ancestor_containing_an_extended_descendant_is_sized_honestly(self):
+        # The undercount this PR's review caught: an ancestor candidate that
+        # merely CONTAINS an extended reference must still report its real,
+        # full size — not the extended child's truncated-to-1 size.
+        trees = {}
+        for i in range(3):
+            label = f"p{i}"
+            wrapper = {
+                "blockId": f"{label}-wrap", "element": "section",
+                "children": [_existing_component_ref(label), _c_leaf(f"{label}-x")],
+            }
+            trees[f"page:{label}"] = [wrapper]
+        result = componentize.find_candidates(trees)
+        self.assertEqual(len(result), 1)
+        # 1 (wrapper) + 4 (the extended ref: itself + 3 shells) + 1 (leaf) = 6
+        self.assertEqual(result[0]["blocks_per_instance"], 6)
 
 
 class AcceptedProposals(unittest.TestCase):
@@ -1910,6 +1937,72 @@ class RunComponentizeApply(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             componentize.apply("acme", runner=boom)
         self.assertIn("REFUSED", str(caught.exception))
+
+    def test_a_proposal_with_no_recorded_instances_is_skipped_not_crashed(self):
+        # Review finding: located[0] was indexed unguarded — an empty
+        # instances list (hand-edited decision record, bad merge) must be
+        # reported, not raise an unhandled IndexError.
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        self._accept()
+        path = componentize.proposal_path("acme")
+        data = json.loads(path.read_text())
+        data["proposals"][0]["instances"] = []
+        path.write_text(json.dumps(data))
+
+        def boom(script):
+            raise AssertionError("must not reach the runner")
+
+        result = componentize.apply("acme", runner=boom)
+
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(len(result["skipped"]), 1)
+
+    def test_a_blockid_less_descendant_refuses_cleanly_not_a_traceback(self):
+        # Review finding: _content_signature doesn't check blockId presence
+        # (by design — blockId is identity, expected to vary), so a
+        # content-identical instance whose interior node happens to lack one
+        # reaches override_shells(), which raises ComponentError. That must
+        # surface as a clean REFUSED SystemExit, not an uncaught traceback.
+        self._write_pages({"home": "t", "menu": "t", "about": "t"})
+        componentize.mine("acme")
+        state = (self.root / "sites" / "acme" / "opt" / "baseline"
+                / "state" / "pages" / "about.json")
+        record = json.loads(state.read_text())
+        blocks = json.loads(record["blocks"])
+        del blocks[0]["children"][1]["blockId"]  # about's own "-p1" node
+        record["blocks"] = json.dumps(blocks)
+        state.write_text(json.dumps(record))
+        self._accept()
+
+        def boom(script):
+            raise AssertionError("must not reach the runner")
+
+        with self.assertRaises(SystemExit) as caught:
+            componentize.apply("acme", runner=boom)
+        self.assertIn("REFUSED", str(caught.exception))
+
+
+class ContentSignatureCatchesExtensionDivergence(unittest.TestCase):
+    """Review finding: a bare TRAP-001 shell carries no element, styles, or
+    content of its own — without extendedFromComponent/referenceBlockId in
+    the signature, two instances extending DIFFERENT pre-existing components
+    at the same nested position would look content-identical."""
+
+    def test_different_extended_component_differs(self):
+        a = {"blockId": "x", "extendedFromComponent": "social-icons",
+             "referenceBlockId": "ref-1"}
+        b = {"blockId": "x", "extendedFromComponent": "newsletter-signup",
+             "referenceBlockId": "ref-1"}
+        self.assertNotEqual(componentize._content_signature(a),
+                            componentize._content_signature(b))
+
+    def test_same_extended_component_and_reference_matches(self):
+        a = {"blockId": "x", "extendedFromComponent": "social-icons",
+             "referenceBlockId": "ref-1"}
+        b = {"blockId": "y", "extendedFromComponent": "social-icons",
+             "referenceBlockId": "ref-1"}
+        self.assertEqual(componentize._content_signature(a),
+                         componentize._content_signature(b))
 
 
 if __name__ == "__main__":

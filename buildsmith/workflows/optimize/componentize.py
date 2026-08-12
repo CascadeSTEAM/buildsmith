@@ -37,6 +37,7 @@ from pathlib import Path
 from buildsmith.errors import CouldNotCheck
 from buildsmith.primitives.blocks import walk
 from buildsmith.workflows.optimize.tokenize import (
+    _accepted_named,
     _refuse_stale_checkpoint,
     _select,
     load_state,
@@ -59,21 +60,19 @@ def annotate(root: dict) -> dict[int, tuple[str, int]]:
     a class name containing '.' or '|' must not collide two different
     structures into one shape.
 
-    An `extendedFromComponent` block is treated as childless here, mirroring
-    collapse's `safe_walk`: its children are override shells belonging to
-    whatever component it already extends (TRAP-001), not free structure of
-    this page. Descending into them would let this shape-hash function
-    single out a shell subtree — often several near-empty, coincidentally
-    identical placeholder nodes — and propose it for extraction, which is
-    exactly the corruption TRAP-001 warns about, compounded: a fresh
-    component minted over another component's mirror.
+    An `extendedFromComponent` block's own hash is keyed on WHICH component
+    it extends (not just whether it extends one): two references to
+    different existing components must never hash the same just because
+    both happen to be bare, empty TRAP-001 shells. Its children are still
+    walked and counted honestly — `find_candidates` is what refuses to treat
+    the block or its interior as a candidate, not this function — so an
+    ancestor containing one still gets its real, full block count.
     """
     shapes: dict[int, tuple[str, int]] = {}
     stack: list[tuple[dict, bool]] = [(root, False)]
     while stack:
         block, ready = stack.pop()
-        children = ([] if block.get("extendedFromComponent")
-                    else block.get("children") or [])
+        children = block.get("children") or []
         if not ready:
             stack.append((block, True))
             for child in children:
@@ -95,7 +94,7 @@ def annotate(root: dict) -> dict[int, tuple[str, int]]:
             (block.get("element") or "?").lower(),
             style_shape,
             named_classes,
-            bool(block.get("extendedFromComponent")),
+            block.get("extendedFromComponent"),
             bool(block.get("isRepeaterBlock")),
             child_shapes,
         ], separators=(",", ":"))
@@ -117,6 +116,15 @@ def find_candidates(trees: dict[str, list[dict]]) -> list[dict]:
     but free-standing instances of the same shape still count — and only
     shapes with enough FREE instances are reported, so totals never
     double-count a block.
+
+    An `extendedFromComponent` block is invisible here, in both directions:
+    never recorded as a candidate itself (composing a "new" component from
+    one would compose from a bare TRAP-001 shell — no element, no styles, no
+    content — silently discarding whatever it currently, correctly extends),
+    and never descended into (its children are that other component's
+    shells, not free structure of this page — mirrors `collapse.safe_walk`).
+    An ancestor that merely *contains* one still gets it, honestly sized, via
+    `annotate()`'s ordinary child_shapes/count — only candidacy is refused.
     """
     instances: dict[str, list[dict]] = {}
     sizes: dict[str, int] = {}
@@ -127,18 +135,14 @@ def find_candidates(trees: dict[str, list[dict]]) -> list[dict]:
             stack: list[tuple[dict, list[str]]] = [(root, [])]
             while stack:
                 block, ancestors = stack.pop()
+                if block.get("extendedFromComponent"):
+                    continue
                 digest, count = shapes[id(block)]
                 sizes[digest] = count
                 instances.setdefault(digest, []).append(
                     {"label": label, "blockId": block.get("blockId"),
                      "element": block.get("element"),
                      "ancestors": list(ancestors)})
-                # matches annotate()'s boundary: an extended block's shells
-                # were never hashed, so their ids are absent from `shapes`
-                # and pushing them here would KeyError — and they must not
-                # be walked into regardless (TRAP-001).
-                if block.get("extendedFromComponent"):
-                    continue
                 for child in block.get("children") or []:
                     stack.append((child, ancestors + [digest]))
 
@@ -241,6 +245,13 @@ def _content_signature(block: dict) -> tuple:
     thing an empty shell would silently erase as a text difference is.
     blockId is excluded on purpose: it is identity, expected to differ, and
     is exactly what `override_shells()` preserves per instance regardless.
+
+    `extendedFromComponent`/`referenceBlockId` are included deliberately, not
+    excluded like blockId: a bare TRAP-001 shell carries no element, styles,
+    or content of its own, so without these two instances that each extend a
+    *different* pre-existing component at the same nested position would
+    otherwise signature identically — and get silently overwritten to
+    extend whichever one happens to be the exemplar's.
     """
     return tuple(
         (
@@ -256,6 +267,8 @@ def _content_signature(block: dict) -> tuple:
             json.dumps(node.get("dynamicValues") or [], sort_keys=True),
             json.dumps(node.get("visibilityCondition"), sort_keys=True),
             bool(node.get("isRepeaterBlock")),
+            node.get("extendedFromComponent"),
+            node.get("referenceBlockId"),
         )
         for node in walk(block)
     )
@@ -270,54 +283,15 @@ def _find_by_block_id(roots: list[dict], block_id: str) -> dict | None:
     return None
 
 
-def _replace_by_block_id(roots: list[dict], block_id: str,
-                         replacement: dict) -> bool:
-    """Swap the node with this blockId for `replacement`, in place."""
-    for index, root in enumerate(roots):
-        if root.get("blockId") == block_id:
-            roots[index] = replacement
-            return True
-        if _replace_in_children(root, block_id, replacement):
-            return True
-    return False
-
-
-def _replace_in_children(node: dict, block_id: str, replacement: dict) -> bool:
-    children = node.get("children")
-    if not children:
-        return False
-    for index, child in enumerate(children):
-        if child.get("blockId") == block_id:
-            children[index] = replacement
-            return True
-        if _replace_in_children(child, block_id, replacement):
-            return True
-    return False
-
-
 def accepted_proposals(site: str) -> list[dict]:
     """Accepted, named proposals from the decision record. Refuses ambiguity,
-    mirroring `tokenize.accepted_mapping`."""
-    path = proposal_path(site)
-    if not path.exists():
-        raise CouldNotCheck(f"no proposal file at {path} — mine first")
-    data = json.loads(path.read_text())
-    accepted = [p for p in data["proposals"] if p["status"] == "accepted"]
-    unnamed = [p["shape"] for p in accepted if not p["name"]]
-    if unnamed:
-        raise SystemExit(
-            f"accepted but unnamed: {unnamed} — a component needs a "
-            "human-given name (a lower-case hyphenated slug, e.g. "
-            "'site-header') before it becomes a record")
-    names = [p["name"] for p in accepted]
-    dupes = {n for n in names if names.count(n) > 1}
-    if dupes:
-        raise SystemExit(f"duplicate component names: {sorted(dupes)}")
-    return accepted
+    sharing its rule with `tokenize.accepted_mapping`."""
+    return _accepted_named(site, path=proposal_path(site),
+                           id_field="shape", noun="component")
 
 
-def apply(site: str, *, clone_url: str = "http://127.0.0.1:8000",
-          target: str = "sandbox.localhost", runner=None) -> dict:
+def apply(site: str, *, target: str = "sandbox.localhost",
+          runner=None) -> dict:
     """Apply accepted proposals whose every instance is content-identical to
     its exemplar: mint a `Builder Component`, replace each instance with an
     override shell, write back, and let the oracle prove nothing rendered
@@ -326,6 +300,12 @@ def apply(site: str, *, clone_url: str = "http://127.0.0.1:8000",
     A proposal whose instances disagree on content or style is reported in
     `skipped` and left untouched (`status` stays "accepted") — see the
     module docstring for why this is a deliberate scope cut, not a bug.
+
+    Unlike `tokenize.apply`/`fonts.apply`, there is no `clone_url`: those
+    verify a literal-to-token or font-load proof against the served site
+    before the oracle runs; extraction has no analogous serving-side check
+    to make — the oracle at the end of `optimize componentize --apply` is
+    already the whole proof (ADR-009).
     """
     from buildsmith.primitives.components import (
         ComponentError,
@@ -355,6 +335,14 @@ def apply(site: str, *, clone_url: str = "http://127.0.0.1:8000",
     skipped: list[dict] = []
     for proposal in accepted:
         instances = proposal["instances"]
+        if not instances:
+            skipped.append({
+                "shape": proposal["shape"], "name": proposal["name"],
+                "reason": "the proposal records no instances at all — "
+                         "nothing to extract",
+            })
+            continue
+
         located: list[tuple[str, str, dict]] = []
         missing = []
         for instance in instances:
@@ -408,18 +396,25 @@ def apply(site: str, *, clone_url: str = "http://127.0.0.1:8000",
             root=exemplar,
         )
         for page_name, block_id, node in item["located"]:
-            shell = override_shells(composed.block, node,
-                                    component_id=component_id)
-            if not _replace_by_block_id(pages[page_name], block_id, shell):
+            try:
+                shell = override_shells(composed.block, node,
+                                        component_id=component_id)
+            except ComponentError as exc:
                 raise SystemExit(
-                    f"REFUSED: {page_name}#{block_id} vanished between "
-                    "locating it and writing it back — this is a bug")
+                    f"REFUSED: {page_name}#{block_id} could not become an "
+                    f"override shell for {component_id!r}: {exc}") from exc
+            # `node` is the exact dict object embedded in `pages[page_name]`
+            # (from `_find_by_block_id`, which never copies) — updating it
+            # in place reaches that page's tree with no second tree walk.
+            node.clear()
+            node.update(shell)
             touched_pages.add(page_name)
 
-        components_payload[component_id] = composed.record()
+        record = composed.record()
+        components_payload[component_id] = record
         applied_shapes.append(proposal["shape"])
         (out_dir / f"component-{component_id}.json").write_text(
-            json.dumps(composed.record(), indent=2) + "\n")
+            json.dumps(record, indent=2) + "\n")
 
     pages_payload = {name: pages[name] for name in sorted(touched_pages)}
     for name, roots in pages_payload.items():

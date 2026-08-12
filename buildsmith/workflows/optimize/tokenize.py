@@ -224,21 +224,37 @@ def _select(site: str, pages: dict, components: dict,
     return chosen
 
 
-def accepted_mapping(site: str) -> dict[str, dict]:
-    """{colour: proposal} for accepted, named proposals. Refuses ambiguity."""
-    path = proposal_path(site)
+def _accepted_named(site: str, *, path: Path, id_field: str,
+                    noun: str) -> list[dict]:
+    """Accepted, named proposals from a decision record at `path`.
+
+    Shared shape between tokenize's colour proposals and componentize's
+    shape proposals: load, filter to accepted, refuse anything accepted but
+    left unnamed, refuse a duplicate human-given name. `id_field` names
+    whichever key identifies a proposal in error messages (tokenize's
+    "value", componentize's "shape") — the rest of the rule does not differ
+    between the two domains, so it lives once, here.
+    """
     if not path.exists():
         raise CouldNotCheck(f"no proposal file at {path} — mine first")
     data = json.loads(path.read_text())
     accepted = [p for p in data["proposals"] if p["status"] == "accepted"]
-    unnamed = [p["value"] for p in accepted if not p["name"]]
+    unnamed = [p[id_field] for p in accepted if not p["name"]]
     if unnamed:
-        raise SystemExit(f"accepted but unnamed: {unnamed} — a token needs "
-                         "a human-given name before it becomes a record")
+        raise SystemExit(
+            f"accepted but unnamed: {unnamed} — a {noun} needs a "
+            "human-given name before it becomes a record")
     names = [p["name"] for p in accepted]
     dupes = {n for n in names if names.count(n) > 1}
     if dupes:
-        raise SystemExit(f"duplicate token names: {sorted(dupes)}")
+        raise SystemExit(f"duplicate {noun} names: {sorted(dupes)}")
+    return accepted
+
+
+def accepted_mapping(site: str) -> dict[str, dict]:
+    """{colour: proposal} for accepted, named proposals. Refuses ambiguity."""
+    accepted = _accepted_named(site, path=proposal_path(site),
+                               id_field="value", noun="token")
     values = [p["value"] for p in accepted]
     dup_values = {v for v in values if values.count(v) > 1}
     if dup_values:
