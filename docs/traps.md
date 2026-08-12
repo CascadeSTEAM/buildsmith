@@ -496,11 +496,14 @@ line.
 **Rule.** Root a component on the element that must actually be visible and
 interactive in the editor — an `iframe`, in this case — rather than wrapping
 it in a `div`. Confirmed twice, by screenshot: `div > iframe` renders blank in
-the editor; a bare `iframe` root (styled directly — border-radius clips an
-iframe's own box the same way it clips `img`/`video`, no `overflow: hidden`
-wrapper needed) renders live with tiles and the marker pin. `buildsmith
-primitives.maps.location_map()` was rebuilt this way *because* of this trap,
-not before it.
+the editor; a bare `iframe` root renders live with tiles and the marker pin.
+`buildsmith primitives.maps.location_map()` was rebuilt this way *because* of
+this trap, not before it. Kept `overflow: hidden` on the iframe itself even
+with no wrapper to put it on: whether a bare replaced element reliably clips
+its own content to its own `border-radius` is a real, still-live
+cross-browser inconsistency (not this trap, but adjacent to it — worth
+naming so nobody "fixes" it away as redundant later), and one Chromium
+screenshot is not proof it holds everywhere.
 
 **Testable:** not yet — this needs a browser against a live sandbox instance
 (`/builder/page/<name>`, cookie-authenticated, checked for an `<iframe>` in

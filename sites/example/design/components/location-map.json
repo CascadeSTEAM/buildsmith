@@ -13,7 +13,8 @@
       "borderRadius": "@map-radius",
       "borderWidth": "1px",
       "borderStyle": "solid",
-      "borderColor": "@map-border"
+      "borderColor": "@map-border",
+      "overflow": "hidden"
     }
   }
 }

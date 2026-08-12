@@ -144,10 +144,13 @@ def location_map(
     `width`/`height`/`border_radius`/`border_color` default to `@map-*` sigils
     so the component themes with the site by default; pass a plain literal
     (e.g. `width="400px"`) for a site that would rather not mint new tokens.
-    No `overflow: hidden` is needed to make the radius take — a browser clips
-    an iframe's own rendered box to it directly, the same as it would an
-    `img` or `video` (confirmed in the same screenshot: the pin and tiles stay
-    inside the rounded corners with no wrapper at all).
+    `overflow: hidden` still ships on the iframe itself (not on a wrapper —
+    there is none) because relying on a browser to clip a replaced element's
+    own content to its own `border-radius` is not the settled cross-browser
+    behaviour it looks like in one screenshot; it is a real, still-live
+    inconsistency (e.g. the same class of bug WordPress Gutenberg had to
+    re-guard against in 2024 after a Chromium engine change). Cheap insurance
+    against a regression nobody would notice until a different browser.
 
     Runs `blocks.validate()` before returning, so a structural mistake fails
     here rather than downstream. Colour-tokenisation is not checked — that is
@@ -186,6 +189,7 @@ def location_map(
             "borderWidth": border_width,
             "borderStyle": "solid",
             "borderColor": border_color,
+            "overflow": "hidden",
         },
     )
     validate(root)

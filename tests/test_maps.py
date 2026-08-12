@@ -153,6 +153,13 @@ class LocationMap(unittest.TestCase):
         # why a shorthand is where a literal colour would hide.
         self.assertNotIn("border", styles)
 
+    def test_overflow_hidden_ships_even_with_no_wrapper_to_put_it_on(self):
+        # Not redundant: a bare replaced element reliably clipping its own
+        # content to its own border-radius is not settled cross-browser
+        # behaviour. See the module docstring and TRAP-019.
+        root = location_map(address="1 Example Way, Nowhere", lat=0.0, lon=0.0)
+        self.assertEqual(root["baseStyles"]["overflow"], "hidden")
+
     def test_a_literal_can_replace_any_sigil(self):
         root = location_map(
             address="1 Example Way, Nowhere", lat=0.0, lon=0.0,
