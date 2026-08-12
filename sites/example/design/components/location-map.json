@@ -1,22 +1,12 @@
 {
   "name": "Location Map",
   "root": {
-    "element": "div",
-    "children": [
-      {
-        "element": "iframe",
-        "attributes": {
-          "src": "https://www.openstreetmap.org/export/embed.html?bbox=-0.006%2C-0.006%2C0.006%2C0.006&layer=mapnik&marker=0.0%2C0.0",
-          "loading": "lazy",
-          "title": "Map: 1 Example Way, Nowhere"
-        },
-        "baseStyles": {
-          "width": "100%",
-          "height": "100%",
-          "border": "none"
-        }
-      }
-    ],
+    "element": "iframe",
+    "attributes": {
+      "src": "https://www.openstreetmap.org/export/embed.html?bbox=-0.006%2C-0.006%2C0.006%2C0.006&layer=mapnik&marker=0.0%2C0.0",
+      "loading": "lazy",
+      "title": "Map: 1 Example Way, Nowhere"
+    },
     "baseStyles": {
       "width": "@map-width",
       "height": "@map-height",
