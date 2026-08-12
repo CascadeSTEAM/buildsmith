@@ -82,9 +82,17 @@ script = list_data_script(
 If the page groups records under section headings (e.g. one `<h2>` per
 category), call `list_data_script()` once per category and join the lines —
 Builder's repeater has no "group by," so each heading needs its own query
-and its own repeater block underneath it. `primitives.repeater.repeater()`'s
-`data_key` already speaks the right vocabulary (`comesFrom: "dataScript"`)
-when given a plain string, so no extra wiring is needed there.
+and its own repeater block underneath it. **Each call needs its own
+`target`.** `list_data_script()` has no awareness of any other call in the
+same script, so two categories sharing a `target` (e.g. both left at
+`"items"`) silently produce `data.items = ...` twice — the second
+assignment overwrites the first, every repeater bound to that key renders
+the *last* category's rows under every heading, and nothing errors.
+Deriving the target from the category itself (`f"items_{slugify(cat)}"`)
+makes a collision structurally hard to reach by accident.
+`primitives.repeater.repeater()`'s `data_key` already speaks the right
+vocabulary (`comesFrom: "dataScript"`) when given a plain string, so no
+extra wiring is needed there.
 
 **3. Build the repeater block** that reads it:
 
