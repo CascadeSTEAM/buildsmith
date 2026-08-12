@@ -97,3 +97,57 @@ jobs:
         run: |
           pip install --quiet --editable .
           python -m buildsmith.tools.secretscan --history
+
+  # A sandbox that merely runs proves nothing (sandbox/README.md) — this job
+  # is the CI copy of that proof, not just a lint. It is slow (a full `bench
+  # init` against the pinned Builder/Frappe commits, from cold) and network-
+  # and memory-heavy in a way `test`/`secretscan` are not, which is exactly
+  # why it is its own job: it runs in parallel with them rather than gating
+  # the fast gates behind the slow one.
+  sandbox-traps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install (editable, visual extras)
+        run: pip install --quiet --editable '.[dev]'
+
+      - name: Install Playwright's browser
+        # check_traps drives a real browser against the sandbox's exposed
+        # port from the runner itself — the `dev` extra installs the
+        # playwright *package*; the browser binary is a separate download.
+        run: playwright install --with-deps chromium
+
+      - name: Free up disk space
+        # `bench init` clones frappe + builder, installs their node_modules,
+        # and builds both apps' frontend assets from cold — a real,
+        # multi-gigabyte build. The runner's preinstalled toolchains this
+        # repo never uses are the cheapest gigabytes to give back.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+          docker image prune -af
+          df -h /
+
+      - name: Bring the pinned sandbox up
+        run: python -m buildsmith.tools.sandbox up
+
+      - name: Serve it
+        # TRAP-001/003 run over the bench console and never needed this; the
+        # TRAP-019 phase opens the Builder editor in a real browser, which
+        # does.
+        run: python -m buildsmith.tools.sandbox serve
+
+      - name: Prove the sandbox still reproduces every known trap
+        run: python -m buildsmith.tools.check_traps
+
+      - name: Tear down
+        # Always, not just on success — a leftover container on a reused
+        # self-hosted runner would out-live the job; on GitHub-hosted
+        # ephemeral runners this is belt-and-suspenders, and cheap either way.
+        if: always()
+        run: python -m buildsmith.tools.sandbox destroy
