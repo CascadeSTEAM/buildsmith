@@ -90,6 +90,9 @@ SAFE_DOMAIN_SUFFIXES = (
     "githubusercontent.com", "ghcr.io", "spdx.org", "json.org", "w3.org",
     "developer.mozilla.org", "redis.io", "mariadb.org", "hatch.pypa.io",
     "astral.sh", "opensource.org", "creativecommons.org",
+    # The map-embed component's own providers (primitives/maps.py). Every site
+    # using it references one of these; naming the provider identifies nobody.
+    "openstreetmap.org", "maps.google.com",
     # The Contributor Covenant's required attribution links (CODE_OF_CONDUCT.md).
     "contributor-covenant.org",
     # Loopback and the dev instance. Not anybody's site.

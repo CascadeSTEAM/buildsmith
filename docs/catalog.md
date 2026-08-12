@@ -14,15 +14,28 @@ site's applied token map.
 |---|---|---|---|---|
 | `brand-ink` | Color | `#12261f` | `#eef5f2` | brand |
 | `brand-primary` | Color | `#0a7d55` | `#3fbf8c` | brand |
+| `map-border` | Color | `#d8ded9` | `#2a332e` | map |
+| `map-height` | Dimension | `320px` | — | map |
+| `map-radius` | Dimension | `12px` | — | map |
+| `map-width` | Dimension | `100%` | — | map |
 | `radius-card` | Dimension | `12px` | — | shape |
 | `space-gutter` | Dimension | `24px` | — | spacing |
 | `space-section` | Dimension | `64px` | — | spacing |
 | `surface` | Color | `#ffffff` | `#0e1512` | surface |
 
-6 token(s). Only `Color` and `Dimension` exist — anything else
+10 token(s). Only `Color` and `Dimension` exist — anything else
 is a component prop plus one injected stylesheet (TRAP-004).
 
 ## Components
+
+### `location-map` — Location Map
+
+```
+<div>
+  <iframe>
+```
+
+**Tokens consumed:** `map-border`, `map-height`, `map-radius`, `map-width`
 
 ### `site-footer` — Site Footer
 

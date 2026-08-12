@@ -147,7 +147,7 @@ class JournalRecordsTheBuild(unittest.TestCase):
             )
             log = journal.render("example", root=root)
         self.assertIn("End-to-end build.", log)
-        self.assertIn("| components | 2 |", log)
+        self.assertIn("| components | 3 |", log)
 
 
 if __name__ == "__main__":
