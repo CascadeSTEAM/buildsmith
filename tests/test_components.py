@@ -24,6 +24,7 @@ from buildsmith.primitives.components import (  # noqa: E402
     assert_colours_tokenised,
     assert_content_preserved,
     compose,
+    override_shells,
     revise,
     slug_to_component_id,
 )
@@ -354,6 +355,62 @@ class RevisionKeepsTheStyleDiscipline(unittest.TestCase):
                 assign_ids(live_header(), seed="component:site-header"),
                 manifest=manifest,
             )
+
+
+class OverrideShells(unittest.TestCase):
+    """`override_shells()` — extraction's other missing half (issue #19):
+    the page-side tree `compose()`/`revise()` never built."""
+
+    def _pair(self):
+        # Two occurrences of the same shape, own ids preserved per page —
+        # exactly what a page's original subtree looks like pre-extraction.
+        component = compose(component_id="menu-card", component_name="Menu Card",
+                            root=new_block("div", children=[
+                                new_block("h2"), new_block("p")]))
+        page_instance = assign_ids(
+            new_block("div", children=[new_block("h2"), new_block("p")]),
+            seed="page:home")
+        return component, page_instance
+
+    def test_shell_preserves_the_pages_own_blockids(self):
+        component, instance = self._pair()
+        shell = override_shells(component.block, instance, component_id="menu-card")
+        self.assertEqual(shell["blockId"], instance["blockId"])
+        self.assertEqual(shell["children"][0]["blockId"],
+                         instance["children"][0]["blockId"])
+
+    def test_shell_references_the_components_blockids(self):
+        component, instance = self._pair()
+        shell = override_shells(component.block, instance, component_id="menu-card")
+        self.assertEqual(shell["referenceBlockId"], component.block["blockId"])
+        self.assertEqual(shell["children"][1]["referenceBlockId"],
+                         component.block["children"][1]["blockId"])
+
+    def test_every_node_is_marked_extended_and_carries_no_content(self):
+        component, instance = self._pair()
+        shell = override_shells(component.block, instance, component_id="menu-card")
+        for node in (shell, *shell["children"]):
+            self.assertEqual(node["extendedFromComponent"], "menu-card")
+            self.assertNotIn("element", node)
+            self.assertNotIn("innerHTML", node)
+
+    def test_refuses_a_shape_mismatch_rather_than_pair_by_position(self):
+        component, instance = self._pair()
+        instance["children"].append(new_block("span"))  # 3 children now, not 2
+        with self.assertRaises(ComponentError) as caught:
+            override_shells(component.block, instance, component_id="menu-card")
+        self.assertIn("TRAP-001", str(caught.exception))
+
+    def test_refuses_an_instance_node_with_no_blockid(self):
+        component, instance = self._pair()
+        del instance["blockId"]
+        with self.assertRaises(ComponentError):
+            override_shells(component.block, instance, component_id="menu-card")
+
+    def test_rejects_an_invalid_component_id(self):
+        component, instance = self._pair()
+        with self.assertRaises(ComponentError):
+            override_shells(component.block, instance, component_id="Menu Card")
 
 
 if __name__ == "__main__":

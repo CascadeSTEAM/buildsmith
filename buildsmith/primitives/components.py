@@ -56,6 +56,7 @@ __all__ = [
     "assert_colours_tokenised",
     "assert_content_preserved",
     "compose",
+    "override_shells",
     "revise",
     "slug_to_component_id",
 ]
@@ -518,3 +519,66 @@ def revise(
         # ComponentSyncer pass across every consuming page or they render nowhere.
         meta={"requires_component_sync": added} if added else {},
     )
+
+
+def override_shells(component_root: dict, instance_root: dict, *,
+                    component_id: str) -> dict:
+    """Build a page-side override-shell tree for one extraction, mirroring
+    `component_root`'s shape but keyed to `instance_root`'s own blockIds.
+
+    This is extraction's missing half: `compose()`/`revise()` build the
+    *component record's* tree; nothing built the tree a page needs instead of
+    the structure it used to carry inline. Per TRAP-001, `extend_block()`
+    matches each of a shell's children against the component's children on
+    `blockId ∈ (shell.blockId, shell.referenceBlockId)`, recursively — so
+    every node here (not just the root) carries `referenceBlockId` pointing
+    at its counterpart in `component_root`, `extendedFromComponent` set to
+    `component_id`, and **the page's own existing blockId preserved at every
+    position** — nothing else on the page that already refers to one of these
+    ids by id should have to change.
+
+    Every shell node is bare — no element, no styles, no content — which is
+    correct only when `instance_root` already equals the tree
+    `component_root` was composed from: there is nothing to preserve as a
+    page-specific override because nothing differs. Verifying that equality
+    is the caller's job, before this is ever called; this function only
+    builds the mirror, on the assumption that pairing is already proven safe.
+
+    Refuses if the two trees disagree in child count at any depth — pairing
+    positionally past that point would silently mismatch shells to the wrong
+    component children, which is exactly how TRAP-001 corrupts a page.
+    """
+    slug_to_component_id(component_id)
+
+    def build(component_node: dict, instance_node: dict, path: str) -> dict:
+        instance_id = instance_node.get("blockId")
+        if not instance_id:
+            raise ComponentError(
+                f"{path}: this page's own node carries no blockId. Read the "
+                "tree back from the page rather than reconstructing it — a "
+                "freshly-minted id here would not match anything already on "
+                "the page, and TRAP-001's guards downstream assume it does."
+            )
+        shell: dict[str, Any] = {
+            "blockId": instance_id,
+            "referenceBlockId": component_node.get("blockId"),
+            "extendedFromComponent": component_id,
+        }
+        component_children = component_node.get("children") or []
+        instance_children = instance_node.get("children") or []
+        if len(component_children) != len(instance_children):
+            raise ComponentError(
+                f"{path}: the component has {len(component_children)} "
+                f"child(ren) here, this instance has "
+                f"{len(instance_children)} — shapes disagree, refusing to "
+                "pair shells by position (TRAP-001)."
+            )
+        if component_children:
+            shell["children"] = [
+                build(cc, ic, f"{path}/{index}")
+                for index, (cc, ic) in enumerate(
+                    zip(component_children, instance_children, strict=True))
+            ]
+        return shell
+
+    return build(component_root, instance_root, component_id)
