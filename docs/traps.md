@@ -463,7 +463,7 @@ where the web path swallows.
 
 ---
 
-## — TRAP-019 — A component-extended child renders on the published page and nowhere in the editor
+## ★ TRAP-019 — A component-extended child renders on the published page and nowhere in the editor
 
 **Symptom.** A `Builder Component` composed as `div > iframe` (`buildsmith`'s
 first cut of the map-embed component, #9) extends onto a page correctly: the
@@ -505,14 +505,24 @@ cross-browser inconsistency (not this trap, but adjacent to it — worth
 naming so nobody "fixes" it away as redundant later), and one Chromium
 screenshot is not proof it holds everywhere.
 
-**Testable:** not yet — this needs a browser against a live sandbox instance
-(`/builder/page/<name>`, cookie-authenticated, checked for an `<iframe>` in
-the rendered DOM), and `buildsmith check traps` today runs pure bench-console
-scripts with no browser dependency. `tests/test_maps.py` pins the *output
-shape* `location_map()` now produces (iframe as root); it cannot see the
-editor-canvas behaviour that shape exists to route around. A real ★ upgrade
-would add a Playwright-driven check here — worth doing before a second
-component is built on top of an extension boundary and hits this blind.
+**Testable: yes**, and it needed a shape of check `buildsmith check traps` did
+not have before this trap — the two existing checks (TRAP-001, TRAP-003) run
+pure bench-console scripts, and this trap's failure mode lives in the
+editor's client-side render tree, which no bench console can see.
+`check_traps._check_editor_renders_map()` builds a throwaway component and
+page named unmistakably as a check fixture (`check-trap-019-map`,
+`/check-trap-019` — never a name a real site would use), drives a real
+browser at the sandbox's own exposed port (login via
+`/api/method/login`, then `/builder/page/<name>`), and asserts an
+`iframe[src*="openstreetmap.org"]` is actually in the DOM — tearing the
+fixture down again whether the check passed or not. Verified both directions
+by hand before trusting it: passes against the current (flat `iframe` root)
+shape, and fails against a reconstructed `div > iframe` tree — i.e. it would
+have caught this trap on day one. Playwright's absence is "could not check"
+(exit 2), not a silent skip, matching `buildsmith verify`'s own rule for the
+same dependency. `tests/test_maps.py` still separately pins the *output
+shape* `location_map()` produces; this check is what proves the *sandbox*
+still treats that shape the way the rule assumes.
 
 ---
 
