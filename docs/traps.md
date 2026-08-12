@@ -541,16 +541,30 @@ every time the page's author previews it. It also 500s the page for every
 real website visitor, silently, because they are Guest and Guest has no
 read permission on almost any doctype by default.
 
-**Cause.** Builder's `page_data_script` does not run in Frappe's own
-`safe_exec` sandbox (the one a Server Script uses, which does expose
-`frappe.get_list`/`frappe.get_all` directly). It runs in `builder/utils.py`'s
-own, separate, more restrictive `safer_exec`, whose `get_safer_globals()`
-exposes only `frappe.db.get_list` and `frappe.db.get_all` — and only
-`get_all` is special-cased: `safe_get_all` unconditionally sets
-`kwargs["ignore_permissions"] = True` before calling `frappe.db.get_list`
-underneath it. `safe_get_list` (backing `.get_list`) sets no such thing, so
-it runs permission-checked as whoever is viewing the page — Guest, for a
-real visitor, who is logged into nothing.
+**Cause.** `builder/utils.py`'s `execute_script()` — what actually runs a
+`page_data_script` — branches on `is_safe_exec_enabled()`, a **bench-wide**
+setting read from `common_site_config.json`, not something a page or even a
+site controls: Frappe's own `safe_exec` if Server Scripts are enabled
+bench-wide, or Builder's own, separate, more restrictive `safer_exec` if
+they are not. The second is overwhelmingly the common case — it needs
+deliberate bench-level config to turn on, most Frappe deployments never do,
+and the pinned sandbox is in that default state (nothing in `init.sh`
+touches it). Everything below is confirmed against `safer_exec`.
+
+`safer_exec`'s `get_safer_globals()` exposes only `frappe.db.get_list` and
+`frappe.db.get_all` — and only `get_all` is special-cased: `safe_get_all`
+unconditionally sets `kwargs["ignore_permissions"] = True` before calling
+`frappe.db.get_list` underneath it. `safe_get_list` (backing `.get_list`)
+sets no such thing, so it runs permission-checked as whoever is viewing the
+page — Guest, for a real visitor, who is logged into nothing.
+
+**The fix's guarantee is conditional on that branch, and this module cannot
+see which one a real site is on.** If Server Scripts *are* enabled
+bench-wide, `page_data_script` runs in plain `safe_exec` instead, where
+`frappe.get_list`/`frappe.get_all` exist directly and neither forces
+`ignore_permissions` — so `frappe.db.get_all`'s public-by-default behaviour
+would not hold there either, and the only way to know is to check
+`common_site_config.json` on the actual target before relying on it.
 
 Confirmed at the pin, both directions, logged in as each user in turn
 (`frappe.set_user(...)` in a bench console, then a real anonymous `curl`

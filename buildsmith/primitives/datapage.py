@@ -2,9 +2,15 @@
 data-driven page (issue #11): a menu, a price list, a roster.
 
 TRAP-020 is why this module exists rather than a site author writing the
-script by hand. Builder's `page_data_script` runs in **its own** sandbox
-(`builder/utils.py`'s `safer_exec`), not a Frappe Server Script's — and the
-two disagree about basics:
+script by hand. Builder's `execute_script()` (`builder/utils.py`) runs a
+`page_data_script` through one of two *different* sandboxes depending on a
+**bench-wide** setting (`common_site_config.json`'s Server Script toggle,
+`is_safe_exec_enabled()` — not something a page, or even a site, controls):
+Frappe's own `safe_exec` if Server Scripts are enabled bench-wide, or
+Builder's own, stricter `safer_exec` if they are not — which is the
+overwhelmingly common case, and the pinned sandbox's own default (nothing
+here turns it on). Verified against `safer_exec`, where the two disagree
+about basics:
 
 - `frappe.get_list`/`frappe.get_all` **do not exist** in it at all. Using
   them raises `AttributeError` — loudly, and identically for the page's
@@ -22,6 +28,15 @@ two disagree about basics:
   (`remove_unsafe_fields`) — no error, just a missing column. Refused here
   at build time instead, loudly, before it ever reaches Builder's sandbox.
 
+**Caveat, stated rather than papered over:** if a target site's bench *does*
+have Server Scripts enabled, `page_data_script` runs in plain `safe_exec`
+instead, where `db.get_all` is bare `frappe.get_all` — permission-checked,
+not `ignore_permissions=True` by construction. This module cannot know that
+from here; it has no site to ask. Confirm `common_site_config.json` before
+trusting `get_all`'s public-by-default behaviour on a site you did not build
+the sandbox for, and grant Guest read explicitly on the content doctype if
+it does have Server Scripts on.
+
 `list_data_script()` builds the script text via `repr()`, the same safe
 pattern `check_traps.py`'s bench scripts use to embed data into generated
 Python — not string interpolation, so nothing here can break out of its own
@@ -36,6 +51,7 @@ from __future__ import annotations
 
 import keyword
 import re
+from math import isfinite as _isfinite
 
 from buildsmith.primitives.blocks import BlockError
 
@@ -59,6 +75,10 @@ _SAFE_SCALARS = (str, int, float, bool, type(None))
 
 
 def _assert_json_safe(value, *, path: str) -> None:
+    if isinstance(value, float) and not _isfinite(value):
+        # repr(float("nan")) is the bare text "nan" — not a Python literal,
+        # a *name*. It does not round-trip; it raises NameError at exec time.
+        raise DataPageError(f"{path}: {value!r} has no valid Python literal form.")
     if isinstance(value, _SAFE_SCALARS):
         return
     if isinstance(value, (list, tuple)):

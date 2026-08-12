@@ -128,15 +128,21 @@ print("torn down")
 # does not need it and `frappe.db.get_list` does.
 _DOCTYPE_SETUP = r"""
 import frappe
+from frappe.utils.safe_exec import is_safe_exec_enabled
 frappe.init(site=%(site)r); frappe.connect()
 frappe.flags.in_migrate = True
+
+# TRAP-020's whole finding is conditional on this being False (Builder's own
+# safer_exec, not a Server Script's safe_exec) — state plainly what this run
+# actually checked rather than silently assuming the pin never changed it.
+print("SAFE_EXEC_ENABLED=" + str(bool(is_safe_exec_enabled())))
 
 if frappe.db.exists("DocType", %(doctype)r):
     frappe.delete_doc("DocType", %(doctype)r, force=True, ignore_permissions=True)
 # Deleting a DocType record does not reliably drop its table (observed at
 # this pin: the meta record was gone, the table and its rows were not) — an
 # explicit drop is what actually makes this setup idempotent across runs.
-frappe.db.sql_ddl('DROP TABLE IF EXISTS `tab%(doctype)s`')
+frappe.db.sql_ddl(%(drop_sql)r)
 
 frappe.get_doc({
     "doctype": "DocType",
@@ -217,13 +223,24 @@ def _clear_caches(site: str) -> None:
     does not reliably do this on its own (observed at this pin: a page
     inserted fresh at a route a previous run also used 403'd for an
     anonymous visitor until this ran). Same two commands `load_dev.py` runs
-    after every load, for the same reason."""
-    subprocess.run(
+    after every load, for the same reason.
+
+    A silent failure here would surface downstream as a false TRAP-020
+    regression — "the page 403'd" is exactly this bug's own symptom — so a
+    non-zero exit is reported loudly rather than swallowed.
+    """
+    completed = subprocess.run(
         [*_COMPOSE, "exec", "-T", "bench", "bash", "-lc",
          f"cd {_BENCH} && bench --site {site} clear-website-cache && "
          f"bench --site {site} clear-cache"],
-        capture_output=True,
+        capture_output=True, text=True, timeout=60,
     )
+    if completed.returncode != 0:
+        print(
+            f"  (cache clear failed, exit {completed.returncode}: "
+            f"{completed.stderr.strip()[-300:]})",
+            file=sys.stderr,
+        )
 
 
 def _teardown(site: str) -> None:
@@ -403,13 +420,31 @@ def _check_public_data_script(site: str) -> bool:
     broken_route = f"{CHECK_020_ROUTE}-broken"
 
     try:
-        run_bench(
+        setup_out = run_bench(
             _DOCTYPE_SETUP % {
                 "site": site,
                 "doctype": CHECK_DOCTYPE,
+                # Built here, not with raw %s inside the template: a
+                # backtick-quoted SQL identifier escapes an embedded
+                # backtick by doubling it, and repr() alone does not know
+                # that — only relying on it once, for a string this module
+                # itself controls, keeps that escaping in one place.
+                "drop_sql": f"DROP TABLE IF EXISTS `tab{CHECK_DOCTYPE.replace('`', '``')}`",
                 "records": [("Grilled Cheese", "5.00"), ("Bowl of Chili", "6.50")],
             }
         )
+        if "SAFE_EXEC_ENABLED=True" in setup_out:
+            # TRAP-020's whole finding — and list_data_script()'s safety
+            # guarantee — is conditional on this being False (see the trap
+            # entry). A different value means this check would be testing
+            # the wrong sandbox, not that the trap is fixed or broken.
+            raise CouldNotCheck(
+                "this sandbox has Server Scripts enabled bench-wide "
+                "(common_site_config.json), so page_data_script runs in plain "
+                "safe_exec, not Builder's safer_exec — TRAP-020's finding does not "
+                "apply as documented, and this check cannot validate that "
+                "configuration."
+            )
 
         fixed_script = list_data_script(
             target="items", doctype=CHECK_DOCTYPE, fields=["item_name", "price"],

@@ -96,6 +96,41 @@ class ListDataScript(unittest.TestCase):
                 filters={"owner": object()},
             )
 
+    def test_non_finite_float_refused(self):
+        # repr(float("nan")) is the bare text "nan" — a name, not a literal.
+        # It would compile, then raise NameError when the script actually
+        # runs, which is exactly the "looks fine until someone loads the
+        # page" shape TRAP-020 is about.
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.assertRaises(DataPageError):
+                list_data_script(
+                    target="items", doctype="Item", fields=["name"],
+                    filters={"price": bad},
+                )
+
+    def test_list_shaped_filters_are_supported(self):
+        # Frappe's other filter syntax: [[field, operator, value], ...].
+        script = list_data_script(
+            target="items", doctype="Item", fields=["name"],
+            filters=[["price", ">=", 5], ["is_available", "=", 1]],
+        )
+        calls = []
+
+        class FakeFrappeDb:
+            def get_all(self, *args, **kwargs):
+                calls.append(kwargs)
+                return []
+
+        class FakeFrappe:
+            db = FakeFrappeDb()
+
+        class AttrDict(dict):
+            __getattr__ = dict.get
+            __setattr__ = dict.__setitem__
+
+        exec(compile(script, "<test>", "exec"), {"frappe": FakeFrappe(), "data": AttrDict()})
+        self.assertEqual(calls[0]["filters"], [["price", ">=", 5], ["is_available", "=", 1]])
+
 
 if __name__ == "__main__":
     unittest.main()
