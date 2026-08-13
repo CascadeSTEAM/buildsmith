@@ -207,12 +207,26 @@ def check_branch_name() -> int:
     opskit = NO_OPSKIT if _env_flag("BUILDSMITH_PUBLIC_ONLY") else opskit_root()
 
     for token in collect_tokens(opskit):
-        # The tokens are patterns, as OpsKit's guard treats them. A malformed one
-        # must not crash the guard into passing, so it is skipped as a literal.
+        # Anchored to word boundaries, matching OpsKit's own
+        # `grep -qiE "\b${tok}\b"` (bin/publication-guard.sh --branch) — a short
+        # token (e.g. a 2-letter environment abbreviation) is otherwise a bare
+        # substring match away from firing on an ordinary word that merely
+        # contains it (issue #50).
+        #
+        # The tokens are patterns, as OpsKit's guard treats them. A malformed
+        # one must not crash the guard into passing, so it falls back to a
+        # literal match. Compiling the token by itself, before wrapping it in
+        # `\b...\b`, matters: a token ending in a lone backslash is invalid
+        # regex on its own, but interpolating it directly into `\b{token}\b`
+        # lets the boundary's own `\b` complete the escape into something
+        # that compiles — silently matching the wrong thing instead of
+        # falling back.
         try:
-            hit = re.search(token, branch, re.IGNORECASE)
+            re.compile(token)
+            pattern = token
         except re.error:
-            hit = token.lower() in branch.lower()
+            pattern = re.escape(token)
+        hit = re.search(rf"\b{pattern}\b", branch, re.IGNORECASE)
         if hit:
             # The token itself is never echoed — this output is read in a
             # terminal that may be shared, and the tokens are the secret.

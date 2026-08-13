@@ -226,6 +226,38 @@ class PublicationGuardTest(unittest.TestCase):
             self._git("reset", "-q")
             (self.repo / "harmless.md").unlink(missing_ok=True)
 
+    def test_short_token_substring_of_ordinary_word_not_rejected(self) -> None:
+        """issue #50. A short token (e.g. a 2-letter environment abbreviation)
+        must not fire on an ordinary word that merely contains it with no word
+        boundary on either side — 'am' inside 'team' here, standing in for the
+        real collision (a 2-letter env token inside an ordinary English word)."""
+        self._git("reset", "-q")
+        self._git("checkout", "-q", "-b", "feat/team-standup-notes")
+        try:
+            (self.repo / "harmless.md").write_text("nothing sensitive\n")
+            self._git("add", "harmless.md")
+            proc = self._guard("--cached", CLIENT_TOKENS="am")
+            out = (proc.stdout + proc.stderr).lower()
+            self.assertNotIn("branch name", out, f"false positive on an ordinary word\n{out}")
+        finally:
+            self._git("branch", "-q", "-m", "main")
+            self._git("reset", "-q")
+            (self.repo / "harmless.md").unlink(missing_ok=True)
+
+    def test_short_token_as_whole_word_in_branch_name_rejected(self) -> None:
+        """The word-boundary fix must not become a bypass: the same short
+        token used as its own whole word is still a real hit."""
+        self._git("reset", "-q")
+        self._git("checkout", "-q", "-b", "feat/am-migration")
+        try:
+            (self.repo / "harmless.md").write_text("nothing sensitive\n")
+            self._git("add", "harmless.md")
+            self.assertRejected(self._guard("--cached", CLIENT_TOKENS="am"), "branch name")
+        finally:
+            self._git("branch", "-q", "-m", "main")
+            self._git("reset", "-q")
+            (self.repo / "harmless.md").unlink(missing_ok=True)
+
     def test_the_fixture_repo_is_the_only_repo_in_reach(self) -> None:
         """Under a pre-push hook the environment carries GIT_DIR, which
         overrides `git -C` — from a linked worktree it is absolute, and this
