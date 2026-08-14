@@ -46,6 +46,13 @@ RENDERED_KEYS = frozenset(
         "baseStyles",
         "blockClientScript",
         "blockId",
+        # Editor-authored label, shown in Builder's outline view — not read by
+        # the HTML renderer, but real live pages carry it on named blocks
+        # (a component's own root, a labeled section like "Hero"). Same
+        # read-back justification as referenceBlockId below: validate()
+        # refusing what a live site actually has would make every read-back
+        # of real content invalid.
+        "blockName",
         "children",
         "classes",
         "clientScript",
@@ -56,6 +63,10 @@ RENDERED_KEYS = frozenset(
         "element",
         "extendedFromComponent",
         "innerHTML",
+        # Written alongside referenceBlockId on every non-root node of a
+        # page's override shell, naming which component the node belongs to.
+        # Same read-back justification as referenceBlockId just below.
+        "isChildOfComponent",
         "isRepeaterBlock",
         "mobileStyles",
         "originalElement",
@@ -275,9 +286,15 @@ def validate(block: dict, *, path: str = "root") -> None:
             f"{sorted(RENDERED_KEYS)}"
         )
 
-    if not block.get("element") and not block.get("extendedFromComponent"):
+    if (
+        not block.get("element")
+        and not block.get("extendedFromComponent")
+        and not block.get("isChildOfComponent")
+    ):
         raise BlockError(
-            f"{path}: a block needs an 'element', unless it extends a component."
+            f"{path}: a block needs an 'element', unless it extends a component "
+            "(extendedFromComponent at the shell's root, isChildOfComponent on "
+            "every node beneath it)."
         )
 
     for key in STYLE_KEYS:
