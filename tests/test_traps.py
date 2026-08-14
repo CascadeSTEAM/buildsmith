@@ -230,6 +230,28 @@ class UnknownKeysAreRefused(unittest.TestCase):
         }
         validate(shell)
 
+    def test_block_name_is_a_known_key(self):
+        """blockName is an editor-authored outline label (e.g. "Navbar",
+        "Footer", "Hero") — the renderer ignores it, but real pages read back
+        from a live site carry it, same as referenceBlockId above. Authoring
+        never writes it (new_block has no parameter for it), so this is
+        built as a plain dict, matching a read-back shape."""
+        block = new_block("div")
+        block["blockName"] = "Hero"
+        validate(block)
+
+    def test_a_shell_descendant_needs_no_element(self):
+        """Real Builder output pairs isChildOfComponent with referenceBlockId
+        on every non-root node of an override shell — content resolves from
+        the referenced component at render time, so the node itself carries
+        neither `element` nor `extendedFromComponent`."""
+        descendant = {
+            "blockId": "c9d8e7f6",
+            "referenceBlockId": "b1a2c3d4",
+            "isChildOfComponent": "site-header",
+        }
+        validate(descendant)
+
 
 if __name__ == "__main__":
     unittest.main()
